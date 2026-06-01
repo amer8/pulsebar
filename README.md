@@ -36,7 +36,13 @@ Then open `http://127.0.0.1:11000` and sign in with the same dashboard credentia
 
 ## Installation
 
-Download the latest GitHub Release DMG, open it, and drag `PulseBar.app` to Applications.
+Install the Homebrew cask from the [amer8 Homebrew Tap](https://github.com/amer8/homebrew-tap):
+
+```bash
+brew install --cask amer8/tap/pulsebar
+```
+
+Alternatively, download the latest [GitHub Release](https://github.com/amer8/pulsebar/releases) DMG file, open it, and drag `PulseBar.app` to Applications.
 
 Signed direct-download builds can check for app updates from the PulseBar menu.
 
