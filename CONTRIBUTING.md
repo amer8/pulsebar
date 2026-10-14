@@ -54,6 +54,7 @@ make readme-assets
 - `swift format lint --strict` with the checked-in `.swift-format` configuration.
 - `swift build -Xswiftc -warnings-as-errors`.
 - `swift test -Xswiftc -warnings-as-errors`.
+- `swift run --skip-build PulseBar --check-runtime` to verify dynamic frameworks load without opening the UI.
 
 The GitHub Actions workflow at `.github/workflows/quality.yml` runs on pull requests, pushes to `main`, and manual dispatches.
 
@@ -79,3 +80,21 @@ The current implementation expects `gpu_telemetry` SSE events shaped like this:
 
 - Keep changes focused and consistent with the existing Swift package app structure.
 - Do not commit local build artifacts from `.build/`.
+
+## Connection Health Feature
+
+This independent branch adds connection state, the last-sample timestamp, and a Reconnect
+action to the existing menu. It detects stale telemetry after 30 seconds, uses bounded
+reconnect delays, and reconnects after wake.
+
+The connection integration tests require `python3` and start disposable simulator servers
+on OS-assigned loopback ports. They exercise live readings, reconnect, stale streams,
+session expiry, and sign-out using in-memory credentials rather than your saved session.
+Telemetry accepts the current dashboard's KiB memory fields and the older MB fields.
+The simulator emits KiB by default; use `--memory-units mb` to exercise legacy compatibility.
+
+Run `make check` and `swift run PulseBar`. For a local fixture, run
+`python3 Scripts/dashboard-simulator.py --port 11000` in another terminal and sign in with
+`demo` / `demo`. Use `--scenario heartbeat-only`, `disconnect`, `unauthorized`, or `malformed`
+to exercise failures. It contains no history panel, port configuration, alerts, startup
+settings, or inference shortcuts.

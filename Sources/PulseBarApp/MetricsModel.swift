@@ -13,6 +13,7 @@ private let updateAvailabilityRetryInterval: Duration = .seconds(30)
 
 @MainActor
 final class MetricsViewModel: ObservableObject {
+    @Published private(set) var connectionHealth = TelemetryConnectionHealth()
     @Published private(set) var snapshot: MetricsSnapshot
     @Published private(set) var debugMessages: [String] = []
     @Published private(set) var isUpdateAvailable = false
@@ -22,8 +23,11 @@ final class MetricsViewModel: ObservableObject {
 
     private let dashboard: DashboardClient
     private let syncAppMonitor: NVIDIASyncAppMonitor
-    private let sessionStore: DashboardSessionStore
+    private let sessionStore: any DashboardSessionStoring
     private let logger = Logger(subsystem: "PulseBar", category: "Dashboard")
+    private var healthTask: Task<Void, Never>?
+    private var wakeTask: Task<Void, Never>?
+    private var retryFailures = 0
     private var authToken: String?
     private var streamTask: Task<Void, Never>?
     private var updateAvailabilityTask: Task<Void, Never>?
@@ -38,9 +42,12 @@ final class MetricsViewModel: ObservableObject {
         !isAuthenticating && !username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !password.isEmpty
     }
 
-    init(syncAppMonitor: NVIDIASyncAppMonitor = .live) {
-        let dashboard = DashboardClient()
-        let sessionStore = DashboardSessionStore()
+    init(
+        syncAppMonitor: NVIDIASyncAppMonitor = .live,
+        dashboard: DashboardClient = DashboardClient(),
+        sessionStore: (any DashboardSessionStoring)? = nil
+    ) {
+        let sessionStore = sessionStore ?? DashboardSessionStore()
         let username = sessionStore.loadUsername()
         let authToken = sessionStore.loadToken()
 
@@ -59,15 +66,41 @@ final class MetricsViewModel: ObservableObject {
         }
 
         if let authToken {
+            connectionHealth.beginConnection()
             log("Loaded saved dashboard session for '\(username)'.")
             startStream(using: authToken)
             startUpdateAvailabilityChecks(using: authToken)
         } else {
             log("No saved dashboard session found.")
         }
+        monitorConnection()
+    }
+
+    private func monitorConnection() {
+        healthTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                guard let self else { return }
+                self.checkFreshness(at: .now)
+            }
+        }
+        wakeTask = Task { [weak self] in
+            for await _ in NSWorkspace.shared.notificationCenter.notifications(named: NSWorkspace.didWakeNotification) {
+                guard !Task.isCancelled else { return }
+                self?.refresh()
+            }
+        }
+    }
+
+    func checkFreshness(at date: Date) {
+        guard let authToken, connectionHealth.markStale(at: date) else { return }
+        snapshot = snapshot.replacingTelemetryUnavailable(note: "Telemetry is stale. Reconnecting…", statusText: "Stale", timestamp: date)
+        startStream(using: authToken)
     }
 
     deinit {
+        healthTask?.cancel()
+        wakeTask?.cancel()
         streamTask?.cancel()
         updateAvailabilityTask?.cancel()
     }
@@ -78,6 +111,8 @@ final class MetricsViewModel: ObservableObject {
             return
         }
 
+        retryFailures = 0
+        connectionHealth.reconnecting()
         snapshot = snapshot.replacingTelemetryUnavailable(
             note: "Reconnecting to the local dashboard…",
             statusText: "Reconnecting…",
@@ -94,6 +129,7 @@ final class MetricsViewModel: ObservableObject {
             return
         }
 
+        connectionHealth.beginConnection()
         isAuthenticating = true
         snapshot = .connecting(username: trimmedUsername)
         streamTask?.cancel()
@@ -133,6 +169,7 @@ final class MetricsViewModel: ObservableObject {
                     self.isUpdateAvailable = false
                     self.sessionStore.clearUsername()
                     self.sessionStore.clearToken()
+                    self.connectionHealth = TelemetryConnectionHealth()
                     self.snapshot = .signedOut(note: message)
                     self.log("Sign-in failed: \(message)")
                 }
@@ -153,6 +190,7 @@ final class MetricsViewModel: ObservableObject {
         isUpdateAvailable = false
         sessionStore.clearUsername()
         sessionStore.clearToken()
+        connectionHealth = TelemetryConnectionHealth()
         snapshot = .signedOut(note: "Signed out. Sign in again to resume metrics.")
         log("Signed out and cleared saved username and token.")
     }
@@ -182,11 +220,12 @@ final class MetricsViewModel: ObservableObject {
                             }
                         },
                         onConnected: {
-                            Task { @MainActor in
+                            await MainActor.run {
                                 guard self.isActiveTelemetryStream(id: streamID, token: token) else {
                                     return
                                 }
 
+                                self.connectionHealth.connected(at: .now)
                                 self.snapshot = self.snapshot.replacingTelemetryUnavailable(
                                     note: "Connected to local dashboard. Waiting for the first telemetry event…",
                                     statusText: "Waiting…",
@@ -195,7 +234,7 @@ final class MetricsViewModel: ObservableObject {
                             }
                         }
                     ) { sample in
-                        Task { @MainActor in
+                        await MainActor.run {
                             guard self.isActiveTelemetryStream(id: streamID, token: token) else {
                                 return
                             }
@@ -205,6 +244,8 @@ final class MetricsViewModel: ObservableObject {
                             self.log(
                                 "Received telemetry sample: GPU \(Int(sample.gpuUtilizationPercent.rounded()))%, memory \(MetricNumberFormat.usedMemoryGiBString(usedGiB)) / \(MetricNumberFormat.wholeNumberString(totalGiB)) GB."
                             )
+                            self.retryFailures = 0
+                            self.connectionHealth.sampleReceived(at: .now)
                             self.snapshot = .live(sample)
                         }
                     }
@@ -215,6 +256,7 @@ final class MetricsViewModel: ObservableObject {
                                 return
                             }
 
+                            self.connectionHealth.reconnecting()
                             self.log("Telemetry stream ended. Waiting to reconnect.")
                             self.snapshot = self.snapshot.replacingTelemetryUnavailable(
                                 note: "Waiting for the telemetry stream to resume…",
@@ -223,7 +265,8 @@ final class MetricsViewModel: ObservableObject {
                             )
                         }
 
-                        try? await Task.sleep(for: .seconds(2))
+                        retryFailures += 1
+                        try? await Task.sleep(for: TelemetryConnectionHealth.retryDelay(failures: retryFailures))
                     }
                 } catch is CancellationError {
                     await MainActor.run {
@@ -249,6 +292,7 @@ final class MetricsViewModel: ObservableObject {
                             return
                         }
 
+                        self.connectionHealth.reconnecting()
                         self.log("Telemetry stream error: \(error.userFacingMessage)")
                         self.snapshot = self.snapshot.replacingTelemetryUnavailable(
                             note: self.dashboardConnectionFailureMessage(for: error),
@@ -257,7 +301,8 @@ final class MetricsViewModel: ObservableObject {
                         )
                     }
 
-                    try? await Task.sleep(for: .seconds(2))
+                    retryFailures += 1
+                    try? await Task.sleep(for: TelemetryConnectionHealth.retryDelay(failures: retryFailures))
                 }
             }
         }
@@ -353,6 +398,7 @@ final class MetricsViewModel: ObservableObject {
         activeUpdateAvailabilityTaskID = nil
         sessionStore.clearUsername()
         sessionStore.clearToken()
+        connectionHealth.expire()
         snapshot = .signedOut(note: "Your dashboard session expired. Sign in again.")
         log(logMessage)
     }
@@ -370,18 +416,23 @@ final class MetricsViewModel: ObservableObject {
 
 @MainActor
 struct MetricsMenuView: View {
-    let viewModel: MetricsViewModel
+    @ObservedObject var viewModel: MetricsViewModel
     @AppStorage(diagnosticsPreferenceKey) private var showDiagnostics = false
     @ObservedObject private var sparkle = SparkleController.shared
-    @State private var menuState: MetricsMenuState
-
-    init(viewModel: MetricsViewModel) {
-        self.viewModel = viewModel
-        _menuState = State(initialValue: MetricsMenuState(viewModel: viewModel))
+    var menuState: MetricsMenuState {
+        MetricsMenuState(viewModel: viewModel)
     }
 
     var body: some View {
+        let menuState = self.menuState
         Group {
+            Section {
+                Label(menuState.connectionHealth.state.rawValue, systemImage: "network")
+                if let date = menuState.connectionHealth.lastSampleAt {
+                    Text("Last sample: \(date.formatted(date: .omitted, time: .standard))")
+                }
+                if menuState.isSignedIn { Button("Reconnect") { viewModel.refresh() } }
+            }
             Section {
                 MetricMenuRow(
                     systemImage: "memorychip",
@@ -457,20 +508,19 @@ struct MetricsMenuView: View {
                 .keyboardShortcut("q", modifiers: .command)
             }
         }
-        .onAppear {
-            menuState = MetricsMenuState(viewModel: viewModel)
-        }
     }
 }
 
 @MainActor
-private struct MetricsMenuState {
+struct MetricsMenuState {
+    let connectionHealth: TelemetryConnectionHealth
     let snapshot: MetricsSnapshot
     let debugMessages: [String]
     let isSignedIn: Bool
     let isUpdateAvailable: Bool
 
     init(viewModel: MetricsViewModel) {
+        connectionHealth = viewModel.connectionHealth
         snapshot = viewModel.snapshot
         debugMessages = viewModel.debugMessages
         isSignedIn = viewModel.isSignedIn
@@ -667,16 +717,48 @@ struct TelemetrySample: Decodable, Sendable {
         case gpuUtilizationPercent = "percentage_utilization"
         case memoryTotalMB = "memory_total_in_mb"
         case memoryAvailableMB = "memory_available_in_mb"
+        case memoryTotalKiB = "memory_total_in_kib"
+        case memoryAvailableKiB = "memory_available_in_kib"
+    }
+}
+
+extension TelemetrySample {
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        gpuUtilizationPercent = try container.decode(Double.self, forKey: .gpuUtilizationPercent)
+        // Current dashboards report KiB; normalize to the units used by existing views.
+        // Require a complete pair so mixed payloads cannot silently combine different units.
+        if container.contains(.memoryTotalKiB) || container.contains(.memoryAvailableKiB) {
+            memoryTotalMB = try container.decode(Double.self, forKey: .memoryTotalKiB) / 1024
+            memoryAvailableMB = try container.decode(Double.self, forKey: .memoryAvailableKiB) / 1024
+        } else {
+            memoryTotalMB = try container.decode(Double.self, forKey: .memoryTotalMB)
+            memoryAvailableMB = try container.decode(Double.self, forKey: .memoryAvailableMB)
+        }
     }
 }
 
 enum TelemetryParser {
     static func firstSample(from data: Data) throws -> TelemetrySample {
-        let payload = try JSONDecoder().decode(TelemetryPayload.self, from: data)
+        let payload: TelemetryPayload
+        do {
+            payload = try JSONDecoder().decode(TelemetryPayload.self, from: data)
+        } catch DecodingError.keyNotFound(let key, _) {
+            throw DashboardError.server("Dashboard telemetry is missing '\(key.stringValue)'.")
+        } catch DecodingError.typeMismatch(_, let context), DecodingError.valueNotFound(_, let context) {
+            let field = context.codingPath.last?.stringValue ?? "payload"
+            throw DashboardError.server("Dashboard telemetry has an invalid value for '\(field)'.")
+        } catch DecodingError.dataCorrupted {
+            throw DashboardError.server("Dashboard telemetry contains invalid JSON or numeric data.")
+        }
         guard let sample = payload.telemetryForGPUs.first else {
             throw DashboardError.missingTelemetry
         }
 
+        guard sample.gpuUtilizationPercent.isFinite, (0...100).contains(sample.gpuUtilizationPercent),
+            sample.memoryTotalMB.isFinite, sample.memoryTotalMB > 0,
+            sample.memoryAvailableMB.isFinite, (0...sample.memoryTotalMB).contains(sample.memoryAvailableMB)
+        else { throw DashboardError.server("The dashboard returned invalid telemetry.") }
         return sample
     }
 }
@@ -769,8 +851,14 @@ private enum DashboardError: LocalizedError {
     }
 }
 
-private struct DashboardClient: Sendable {
-    private let session = URLSession.shared
+struct DashboardClient: Sendable {
+    private let session: URLSession
+    private let baseURL: URL
+
+    init(baseURL: URL = URL(string: "http://127.0.0.1:11000")!, session: URLSession = .shared) {
+        self.baseURL = baseURL
+        self.session = session
+    }
 
     func login(username: String, password: String) async throws -> String {
         var request = URLRequest(url: endpoint("/api/login"))
@@ -830,8 +918,8 @@ private struct DashboardClient: Sendable {
     func consumeTelemetryStream(
         token: String,
         onLog: @escaping @Sendable (String) -> Void = { _ in },
-        onConnected: @escaping @Sendable () -> Void = {},
-        onSample: @escaping @Sendable (TelemetrySample) -> Void
+        onConnected: @escaping @Sendable () async -> Void = {},
+        onSample: @escaping @Sendable (TelemetrySample) async -> Void
     ) async throws {
         var request = URLRequest(url: endpoint("/api/v1/gpu_telemetry/stream"))
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -855,7 +943,7 @@ private struct DashboardClient: Sendable {
             throw DashboardError.server("Unable to open the telemetry stream.")
         }
 
-        onConnected()
+        await onConnected()
         onLog("Telemetry stream is open. Waiting for SSE events.")
 
         var eventName = ""
@@ -874,7 +962,7 @@ private struct DashboardClient: Sendable {
                 previousWasCarriageReturn = true
 
                 if line.isEmpty {
-                    try handleEvent(
+                    try await handleEvent(
                         name: eventName,
                         dataLines: dataLines,
                         onLog: onLog,
@@ -909,7 +997,7 @@ private struct DashboardClient: Sendable {
                 lineBuffer.removeAll(keepingCapacity: true)
 
                 if line.isEmpty {
-                    try handleEvent(
+                    try await handleEvent(
                         name: eventName,
                         dataLines: dataLines,
                         onLog: onLog,
@@ -945,8 +1033,8 @@ private struct DashboardClient: Sendable {
         name: String,
         dataLines: [String],
         onLog: @escaping @Sendable (String) -> Void,
-        onSample: @escaping @Sendable (TelemetrySample) -> Void
-    ) throws {
+        onSample: @escaping @Sendable (TelemetrySample) async -> Void
+    ) async throws {
         guard !dataLines.isEmpty else {
             return
         }
@@ -957,7 +1045,7 @@ private struct DashboardClient: Sendable {
         case "gpu_telemetry":
             onLog("Received gpu_telemetry event.")
             let sample = try TelemetryParser.firstSample(from: data)
-            onSample(sample)
+            await onSample(sample)
 
         case "error":
             onLog("Received error event from telemetry stream.")
@@ -975,7 +1063,7 @@ private struct DashboardClient: Sendable {
     }
 
     private func endpoint(_ path: String) -> URL {
-        URL(string: path, relativeTo: dashboardBaseURL)!.absoluteURL
+        URL(string: path, relativeTo: baseURL)!.absoluteURL
     }
 
     private func decodeSSELine(from bytes: [UInt8]) -> String {
@@ -1016,7 +1104,17 @@ private enum SessionStoreError: LocalizedError {
     }
 }
 
-private struct DashboardSessionStore {
+@MainActor
+protocol DashboardSessionStoring {
+    func loadUsername() -> String
+    func saveUsername(_ username: String)
+    func clearUsername()
+    func loadToken() -> String?
+    func saveToken(_ token: String) throws
+    func clearToken()
+}
+
+private struct DashboardSessionStore: DashboardSessionStoring {
     private let usernameKey = "PulseBar.Dashboard.Username"
     private let keychainService = "PulseBar.Dashboard"
     private let keychainAccount = "dashboard-token"

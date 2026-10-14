@@ -1,7 +1,6 @@
 import AppKit
 import SwiftUI
 
-@main
 @MainActor
 struct PulseBarApp: App {
     private let viewModel = MetricsViewModel()

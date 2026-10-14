@@ -43,7 +43,7 @@ INSTALL_DIR ?= $(HOME)/Applications
 INSTALLED_APP := $(INSTALL_DIR)/$(APP_NAME).app
 NOTARIZE_APP_ZIP := /tmp/$(APP_NAME)Notarize.zip
 
-.PHONY: build test format format-lint check readme-assets release bundle sign notarize-app dmg signed-dmg notarize-dmg notarize-dmg-only release-dmg zip signed-zip release-zip release-artifacts package-dmg package-zip package-dsym install uninstall
+.PHONY: build test runtime-check format format-lint check readme-assets release bundle sign notarize-app dmg signed-dmg notarize-dmg notarize-dmg-only release-dmg zip signed-zip release-zip release-artifacts package-dmg package-zip package-dsym install uninstall
 .NOTPARALLEL: release-dmg release-zip release-artifacts notarize-dmg
 
 build:
@@ -190,7 +190,10 @@ format:
 format-lint:
 	swift format lint --strict --configuration $(FORMAT_CONFIG) --recursive $(SWIFT_FORMAT_PATHS)
 
-check: format-lint build test
+runtime-check: build
+	swift run --skip-build PulseBar --check-runtime
+
+check: format-lint build test runtime-check
 
 readme-assets:
 	mkdir -p "$(README_ASSET_DIR)"
