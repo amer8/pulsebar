@@ -23,7 +23,8 @@ let package = Package(
         .executableTarget(
             name: "PulseBarApp",
             dependencies: [
-                .product(name: "Sparkle", package: "Sparkle")
+                "PulseBarUI",
+                .product(name: "Sparkle", package: "Sparkle"),
             ],
             path: "Sources/PulseBarApp",
             linkerSettings: [
@@ -36,8 +37,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "PulseBarTools",
+            dependencies: ["PulseBarUI"],
             path: "Sources/PulseBarTools"
         ),
+        .target(name: "PulseBarUI", path: "Sources/PulseBarUI"),
         .testTarget(
             name: "PulseBarAppTests",
             dependencies: ["PulseBarApp"],

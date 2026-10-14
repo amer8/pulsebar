@@ -96,5 +96,23 @@ The simulator emits KiB by default; use `--memory-units mb` to exercise legacy c
 Run `make check` and `swift run PulseBar`. For a local fixture, run
 `python3 Scripts/dashboard-simulator.py --port 11000` in another terminal and sign in with
 `demo` / `demo`. Use `--scenario heartbeat-only`, `disconnect`, `unauthorized`, or `malformed`
-to exercise failures. It contains no history panel, port configuration, alerts, startup
-settings, or inference shortcuts.
+to exercise failures. Connection health is part of the merged main branch.
+
+## Guided Setup Feature
+
+This independent branch adds a local-port setting, a dashboard connection check, NVIDIA
+Sync and SSH setup actions, and inline login errors. Saved sessions are isolated by port.
+Run `make check` and `swift run PulseBar`. For a local fixture, run
+`python3 Scripts/dashboard-simulator.py --port 11001` in another terminal, set port 11001
+in Preferences, and sign in with `demo` / `demo`. The existing telemetry menu is retained.
+
+Preferences uses compact connection, account, and diagnostics cards. The app and standalone Preferences
+renderer share the same SwiftUI layout in `Sources/PulseBarUI`. To inspect signed-in,
+sign-in, and invalid-port states in both light and dark mode without saved credentials:
+
+```bash
+swift run pulsebar-tools render-preferences-previews
+```
+
+The previews are saved in `.build/preferences-previews/`. This feature keeps the README
+image, caption, and image dimensions identical to `main`.
