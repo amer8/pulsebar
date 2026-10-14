@@ -1,6 +1,7 @@
 import AppKit
 import Darwin
 import Foundation
+import PulseBarUI
 import SwiftUI
 
 @main
@@ -47,6 +48,8 @@ private struct Tool {
             try makeAppcast(rest)
         case "release":
             try release(rest)
+        case "render-preferences-previews":
+            try renderPreferencesPreviews(rest)
         case "render-readme-assets":
             try renderReadmeAssets(rest)
         case "verify-appcast":
@@ -69,6 +72,7 @@ private struct Tool {
               pulsebar-tools make-appcast <PulseBar-version.zip> [feed-url]
               pulsebar-tools release
               pulsebar-tools render-readme-assets
+              pulsebar-tools render-preferences-previews
               pulsebar-tools verify-appcast <appcast.xml> <version>
 
             Environment used by release/appcast:
@@ -102,6 +106,14 @@ private struct Tool {
         let menuPreview = assetDirectory.appendingPathComponent("menu-preview.png")
         try ReadmeAssetRenderer.writeMenuPreview(to: menuPreview)
         print("Updated \(menuPreview.path)")
+    }
+
+    private func renderPreferencesPreviews(_ arguments: [String]) throws {
+        guard arguments.isEmpty else { throw ToolError("Usage: pulsebar-tools render-preferences-previews") }
+        let directory = root.appendingPathComponent(".build/preferences-previews")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try ReadmeAssetRenderer.writePreferencesPreviews(to: directory)
+        print("Updated \(directory.path)")
     }
 
     private func changelogToHTML(_ arguments: [String]) throws {
@@ -697,6 +709,71 @@ private enum ReadmeAssetRenderer {
         }
 
         try image.writePNG(to: url)
+    }
+
+    static func writePreferencesPreviews(to directory: URL) throws {
+        for scheme: ColorScheme in [.light, .dark] {
+            for sample in [PreferencesSample.signedIn, .signedOut, .invalidPort] {
+                let name = "\(sample.rawValue)-\(scheme == .light ? "light" : "dark").png"
+                let height: CGFloat = sample == .signedIn ? 420 : (sample == .signedOut ? 480 : 520)
+                let image = try nativeImage(PreferencesSampleView(sample: sample), size: NSSize(width: 560, height: height), scheme: scheme)
+                try image.writePNG(to: directory.appendingPathComponent(name))
+            }
+        }
+    }
+
+    private static func nativeImage<Content: View>(_ content: Content, size: NSSize, scheme: ColorScheme) throws -> NSImage {
+        // Native fields and buttons need AppKit drawing; ImageRenderer omits platform-backed controls.
+        _ = NSApplication.shared.setActivationPolicy(.prohibited)
+        let view = NSHostingView(
+            rootView: content.environment(\.colorScheme, scheme).environment(\.locale, Locale(identifier: "en_US"))
+                .environment(\.timeZone, TimeZone(secondsFromGMT: 0)!))
+        let window = NSWindow(
+            contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: scheme == .light ? .aqua : .darkAqua)
+        window.contentView = view
+        view.frame = NSRect(origin: .zero, size: size)
+        view.layoutSubtreeIfNeeded()
+        guard
+            let bitmap = NSBitmapImageRep(
+                bitmapDataPlanes: nil, pixelsWide: Int(size.width * 2), pixelsHigh: Int(size.height * 2), bitsPerSample: 8,
+                samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)
+        else { throw ToolError("failed to render preferences preview") }
+        bitmap.size = size
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        let image = NSImage(size: size)
+        image.addRepresentation(bitmap)
+        window.close()
+        return image
+    }
+}
+
+private enum PreferencesSample: String {
+    case signedIn = "signed-in"
+    case signedOut = "signed-out"
+    case invalidPort = "invalid-port"
+}
+
+private struct PreferencesSampleView: View {
+    let sample: PreferencesSample
+    private var state: DashboardPreferencesState {
+        var state = DashboardPreferencesState(endpointAddress: "127.0.0.1:11000", accountName: sample == .signedIn ? "demo" : nil)
+        state.connectionTitle = sample == .signedIn ? "Connected" : "Signed out"
+        state.connectionTone = sample == .signedIn ? .success : .neutral
+        state.canSignIn = true
+        if sample == .invalidPort {
+            state.canApplyPort = true
+            state.canTestConnection = false
+            state.feedback = PreferencesFeedback("Port must be between 1 and 65535.", tone: .error)
+        }
+        return state
+    }
+    var body: some View {
+        DashboardPreferencesContent(
+            port: .constant(sample == .invalidPort ? "70000" : "11000"), username: .constant("demo"), password: .constant("sample"),
+            showDiagnostics: .constant(false), state: state, actions: DashboardPreferencesActions()
+        )
     }
 }
 

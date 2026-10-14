@@ -1,13 +1,14 @@
 import AppKit
 import Foundation
 import OSLog
+import PulseBarUI
 import Security
 import SwiftUI
 
 private let diagnosticsPreferenceKey = "PulseBar.ShowDiagnostics"
-private let dashboardBaseURL = URL(string: "http://127.0.0.1:11000")!
-private let dashboardLocalEndpoint = "127.0.0.1:11000"
-private let manualSSHTunnelCommand = "ssh -L 11000:localhost:11000 <username>@<IP-or-spark-hostname.local>"
+private var dashboardBaseURL: URL { DashboardEndpoint.current.url }
+private var dashboardLocalEndpoint: String { DashboardEndpoint.current.address }
+private var manualSSHTunnelCommand: String { DashboardEndpoint.current.tunnelCommand }
 private let updateAvailabilityPollInterval: Duration = .seconds(3_600)
 private let updateAvailabilityRetryInterval: Duration = .seconds(30)
 
@@ -17,13 +18,14 @@ final class MetricsViewModel: ObservableObject {
     @Published private(set) var snapshot: MetricsSnapshot
     @Published private(set) var debugMessages: [String] = []
     @Published private(set) var isUpdateAvailable = false
+    @Published private(set) var endpoint = DashboardEndpoint.current
     @Published var username: String
     @Published var password = ""
     @Published private(set) var isAuthenticating = false
 
-    private let dashboard: DashboardClient
+    private var dashboard: DashboardClient
     private let syncAppMonitor: NVIDIASyncAppMonitor
-    private let sessionStore: any DashboardSessionStoring
+    private var sessionStore: any DashboardSessionStoring
     private let logger = Logger(subsystem: "PulseBar", category: "Dashboard")
     private var healthTask: Task<Void, Never>?
     private var wakeTask: Task<Void, Never>?
@@ -44,10 +46,12 @@ final class MetricsViewModel: ObservableObject {
 
     init(
         syncAppMonitor: NVIDIASyncAppMonitor = .live,
-        dashboard: DashboardClient = DashboardClient(),
+        dashboard: DashboardClient? = nil,
         sessionStore: (any DashboardSessionStoring)? = nil
     ) {
-        let sessionStore = sessionStore ?? DashboardSessionStore()
+        let endpoint = DashboardEndpoint.current
+        let dashboard = dashboard ?? DashboardClient(baseURL: endpoint.url)
+        let sessionStore = sessionStore ?? DashboardSessionStore(endpoint: endpoint)
         let username = sessionStore.loadUsername()
         let authToken = sessionStore.loadToken()
 
@@ -55,6 +59,7 @@ final class MetricsViewModel: ObservableObject {
         self.syncAppMonitor = syncAppMonitor
         self.sessionStore = sessionStore
         self.authToken = authToken
+        self.endpoint = endpoint
 
         if authToken != nil {
             self.username = username
@@ -162,7 +167,7 @@ final class MetricsViewModel: ObservableObject {
                     let message = self.dashboardConnectionFailureMessage(for: error)
                     self.isAuthenticating = false
                     self.password = ""
-                    self.username = ""
+                    self.username = trimmedUsername
                     self.authToken = nil
                     self.activeTelemetryStreamID = nil
                     self.activeUpdateAvailabilityTaskID = nil
@@ -193,6 +198,43 @@ final class MetricsViewModel: ObservableObject {
         connectionHealth = TelemetryConnectionHealth()
         snapshot = .signedOut(note: "Signed out. Sign in again to resume metrics.")
         log("Signed out and cleared saved username and token.")
+    }
+
+    func configureEndpoint(_ target: DashboardEndpoint) {
+        guard target != endpoint, !isAuthenticating else { return }
+        streamTask?.cancel()
+        updateAvailabilityTask?.cancel()
+        activeTelemetryStreamID = nil
+        activeUpdateAvailabilityTaskID = nil
+        endpoint = target
+        target.save()
+        dashboard = DashboardClient(baseURL: target.url)
+        sessionStore = DashboardSessionStore(endpoint: target)
+        authToken = sessionStore.loadToken()
+        username = sessionStore.loadUsername()
+        password = ""
+        isUpdateAvailable = false
+        retryFailures = 0
+        connectionHealth = TelemetryConnectionHealth()
+        snapshot = authToken == nil ? .signedOut() : .connecting(username: username)
+        if let authToken {
+            connectionHealth.beginConnection()
+            startStream(using: authToken)
+            startUpdateAvailabilityChecks(using: authToken)
+        }
+    }
+
+    func testConnection() async -> String {
+        let target = endpoint
+        var request = URLRequest(url: target.url)
+        request.timeoutInterval = 5
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, (200..<400).contains(http.statusCode) else {
+                return "A service responded, but the dashboard page was unavailable."
+            }
+            return "Dashboard page is reachable at \(target.address). Sign in to verify telemetry."
+        } catch { return DashboardConnectionMessage.message(for: error, syncAppState: syncAppMonitor.currentState(), endpoint: target) }
     }
 
     func quit() {
@@ -381,7 +423,7 @@ final class MetricsViewModel: ObservableObject {
     private func dashboardConnectionFailureMessage(for error: Error) -> String {
         DashboardConnectionMessage.message(
             for: error,
-            syncAppState: syncAppMonitor.currentState()
+            syncAppState: syncAppMonitor.currentState(), endpoint: endpoint
         )
     }
 
@@ -814,21 +856,21 @@ struct NVIDIASyncAppMonitor: Sendable {
 }
 
 enum DashboardConnectionMessage {
-    static func message(for error: Error, syncAppState: NVIDIASyncAppState) -> String {
+    static func message(for error: Error, syncAppState: NVIDIASyncAppState, endpoint: DashboardEndpoint = .standard) -> String {
         guard error.isLocalDashboardConnectivityError else {
             return error.userFacingMessage
         }
 
         switch syncAppState {
         case .running:
-            return "NVIDIA Sync is running. Open DGX Dashboard, or keep a manual SSH tunnel forwarding \(dashboardLocalEndpoint)."
+            return "NVIDIA Sync is running. Open DGX Dashboard, or keep a manual SSH tunnel forwarding \(endpoint.address)."
         case .notRunning:
-            return "Expose DGX Dashboard at \(dashboardLocalEndpoint) with NVIDIA Sync or a manual SSH tunnel: \(manualSSHTunnelCommand)"
+            return "Expose DGX Dashboard at \(endpoint.address) with NVIDIA Sync or a manual SSH tunnel: \(endpoint.tunnelCommand)"
         }
     }
 }
 
-private enum DashboardError: LocalizedError {
+enum DashboardError: LocalizedError {
     case invalidResponse
     case unauthorized
     case loginFailed
@@ -1114,21 +1156,27 @@ protocol DashboardSessionStoring {
     func clearToken()
 }
 
-private struct DashboardSessionStore: DashboardSessionStoring {
-    private let usernameKey = "PulseBar.Dashboard.Username"
+struct DashboardSessionStore: DashboardSessionStoring {
+    private let endpoint: DashboardEndpoint
+    private let defaults: UserDefaults
     private let keychainService = "PulseBar.Dashboard"
-    private let keychainAccount = "dashboard-token"
+    private var usernameKey: String { endpoint.usernameKey }
+    private var keychainAccount: String { endpoint.sessionAccount }
+    init(endpoint: DashboardEndpoint = .current, defaults: UserDefaults = .standard) {
+        self.endpoint = endpoint
+        self.defaults = defaults
+    }
 
     func loadUsername() -> String {
-        UserDefaults.standard.string(forKey: usernameKey) ?? ""
+        defaults.string(forKey: usernameKey) ?? ""
     }
 
     func saveUsername(_ username: String) {
-        UserDefaults.standard.set(username, forKey: usernameKey)
+        defaults.set(username, forKey: usernameKey)
     }
 
     func clearUsername() {
-        UserDefaults.standard.removeObject(forKey: usernameKey)
+        defaults.removeObject(forKey: usernameKey)
     }
 
     func loadToken() -> String? {
@@ -1243,67 +1291,69 @@ extension Error {
 struct PulseBarPreferencesView: View {
     @ObservedObject var viewModel: MetricsViewModel
     @AppStorage(diagnosticsPreferenceKey) private var showDiagnostics = false
-    @FocusState private var focusedField: Field?
-
-    private enum Field {
-        case username
-        case password
-    }
+    @State private var portText = String(DashboardEndpoint.current.port)
+    @State private var feedback: PreferencesFeedback?
+    @State private var checking = false
 
     var body: some View {
-        Form {
-            Section("Dashboard") {
-                if viewModel.isSignedIn {
-                    if !viewModel.username.isEmpty {
-                        Text("Connected as \(viewModel.username)")
-                            .foregroundStyle(.secondary)
-                    }
+        DashboardPreferencesContent(
+            port: $portText, username: $viewModel.username, password: $viewModel.password,
+            showDiagnostics: $showDiagnostics, state: presentation, actions: actions
+        )
+        .frame(minWidth: 520, minHeight: 420)
+    }
 
-                    Button("Sign Out") {
-                        viewModel.signOut()
-                    }
-                    .padding(.bottom, 10)
-                } else {
-                    Text("Expose DGX Dashboard at \(dashboardLocalEndpoint) with NVIDIA Sync or a manual SSH tunnel.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+    private var presentation: DashboardPreferencesState {
+        var state = DashboardPreferencesState(
+            endpointAddress: viewModel.endpoint.address,
+            accountName: viewModel.isSignedIn ? (viewModel.username.isEmpty ? "dashboard" : viewModel.username) : nil
+        )
+        state.connectionTitle = viewModel.connectionHealth.state.rawValue
+        switch viewModel.connectionHealth.state {
+        case .live: state.connectionTone = .success
+        case .stale, .reconnecting, .expired: state.connectionTone = .warning
+        default: state.connectionTone = .neutral
+        }
+        state.isAuthenticating = viewModel.isAuthenticating
+        state.isChecking = checking
+        state.canApplyPort = (try? DashboardEndpoint.parse(portText)) != viewModel.endpoint
+        state.canTestConnection = !state.canApplyPort
+        state.canSignIn = viewModel.canSignIn
+        state.feedback = feedback
+        state.accountNote = viewModel.snapshot.gpu.note
+        return state
+    }
 
-                    TextField("Username", text: $viewModel.username)
-                        .focused($focusedField, equals: .username)
-
-                    SecureField("Password", text: $viewModel.password)
-                        .focused($focusedField, equals: .password)
-
-                    Button(viewModel.isAuthenticating ? "Signing In…" : "Sign In") {
-                        viewModel.signIn()
-                    }
-                    .disabled(!viewModel.canSignIn)
-                    .padding(.bottom, 10)
-                }
-            }
-
-            Section {
-                Toggle("Show diagnostics in menu", isOn: $showDiagnostics)
-
-                Text("When enabled, PulseBar shows recent dashboard connection logs in the menu bar dropdown.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+    private var actions: DashboardPreferencesActions {
+        var actions = DashboardPreferencesActions()
+        actions.applyPort = {
+            do {
+                let endpoint = try DashboardEndpoint.parse(portText)
+                viewModel.configureEndpoint(endpoint)
+                portText = String(endpoint.port)
+                feedback = nil
+            } catch { feedback = PreferencesFeedback(error.userFacingMessage, tone: .error) }
+        }
+        actions.testConnection = {
+            checking = true
+            Task {
+                feedback = PreferencesFeedback(await viewModel.testConnection())
+                checking = false
             }
         }
-        .padding(20)
-        .frame(width: 420, height: 250)
-        .onAppear {
-            DispatchQueue.main.async {
-                guard !viewModel.isSignedIn else {
-                    focusedField = nil
-                    return
-                }
-
-                focusedField = viewModel.username.isEmpty ? .username : .password
-            }
+        actions.openSync = {
+            feedback =
+                DashboardSetupActions.openSync()
+                ? PreferencesFeedback("Opened NVIDIA Sync.")
+                : PreferencesFeedback("NVIDIA Sync was not found in Applications.", tone: .error)
         }
+        actions.copyTunnel = {
+            DashboardSetupActions.copyTunnel(viewModel.endpoint)
+            feedback = PreferencesFeedback("SSH tunnel command copied.", tone: .success)
+        }
+        actions.signIn = { viewModel.signIn() }
+        actions.signOut = { viewModel.signOut() }
+        return actions
     }
 }
 
@@ -1322,14 +1372,14 @@ enum PulseBarNavigation {
             )
 
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 420, height: 250),
+                contentRect: NSRect(x: 0, y: 0, width: 560, height: viewModel.isSignedIn ? 420 : 480),
                 styleMask: [.titled, .closable, .miniaturizable, .resizable],
                 backing: .buffered,
                 defer: false
             )
             window.isReleasedWhenClosed = false
             window.contentViewController = hostingController
-            window.minSize = NSSize(width: 420, height: 250)
+            window.minSize = NSSize(width: 520, height: 420)
             window.center()
             window.standardWindowButton(.zoomButton)?.isEnabled = false
 
