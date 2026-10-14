@@ -1,8 +1,8 @@
 
 <p align="center">
-  <img src="docs/assets/menu-preview.png" alt="Connection status, last sample time, and Reconnect in the PulseBar menu." width="720">
+  <img src="docs/assets/menu-preview.png" alt="The welcome guide and launch-at-login setting in PulseBar Preferences." width="950">
   <br>
-  <em>Connection status, last sample time, and Reconnect in the PulseBar menu. Rendered preview with sample data.</em>
+  <em>The welcome guide and launch-at-login setting in PulseBar Preferences. Rendered preview with sample data.</em>
 </p>
 
 [![CI](https://github.com/amer8/pulsebar/actions/workflows/quality.yml/badge.svg?branch=main)](https://github.com/amer8/pulsebar/actions/workflows/quality.yml)

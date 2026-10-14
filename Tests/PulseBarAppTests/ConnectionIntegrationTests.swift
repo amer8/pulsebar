@@ -5,7 +5,7 @@ import XCTest
 
 final class ConnectionIntegrationTests: XCTestCase {
     @MainActor
-    func testMenuUsesLiveReadingsAndDiagnosticsAfterConnectingAndRefreshing() async throws {
+    func testMenuUsesLiveReadingsAfterConnectingAndRefreshing() async throws {
         let server = try DashboardFixture(scenario: "live")
         let session = URLSession(configuration: .ephemeral)
         let model = MetricsViewModel(
@@ -24,7 +24,7 @@ final class ConnectionIntegrationTests: XCTestCase {
         XCTAssertNotNil(menu.menuState.connectionHealth.lastSampleAt)
         XCTAssertEqual(menu.menuState.snapshot.menuBarTitle, model.snapshot.menuBarTitle)
         XCTAssertNotEqual(menu.menuState.snapshot.menuBarTitle, "RAM -- GPU --")
-        XCTAssertTrue(menu.menuState.debugMessages.contains { $0.contains("Received telemetry sample") })
+        XCTAssertTrue(model.debugMessages.contains { $0.contains("Received telemetry sample") })
 
         model.refresh()
         XCTAssertEqual(menu.menuState.connectionHealth.state, .reconnecting)
@@ -54,7 +54,7 @@ final class ConnectionIntegrationTests: XCTestCase {
         XCTAssertEqual(menu.menuState.snapshot.gpu.note, "Telemetry is stale. Reconnecting…")
         XCTAssertEqual(menu.menuState.snapshot.menuBarTitle, "RAM -- GPU --")
         try await waitUntil { model.connectionHealth.state == .waiting }
-        XCTAssertTrue(menu.menuState.debugMessages.contains { $0.contains("Telemetry stream responded with HTTP 200") })
+        XCTAssertTrue(model.debugMessages.contains { $0.contains("Telemetry stream responded with HTTP 200") })
     }
 
     @MainActor

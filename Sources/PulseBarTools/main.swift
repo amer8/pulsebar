@@ -7,9 +7,9 @@ import SwiftUI
 @main
 @MainActor
 enum PulseBarTools {
-    static func main() {
+    static func main() async {
         do {
-            try Tool().run(Array(CommandLine.arguments.dropFirst()))
+            try await Tool().run(Array(CommandLine.arguments.dropFirst()))
         } catch let error as ToolError {
             FileHandle.standardError.writeLine("ERROR: \(error.message)")
             Darwin.exit(1)
@@ -30,7 +30,7 @@ private struct Tool {
         environment = ProcessInfo.processInfo.environment
     }
 
-    func run(_ arguments: [String]) throws {
+    func run(_ arguments: [String]) async throws {
         guard let command = arguments.first else {
             printUsage()
             throw ToolError("missing command")
@@ -49,7 +49,7 @@ private struct Tool {
         case "release":
             try release(rest)
         case "render-preferences-previews":
-            try renderPreferencesPreviews(rest)
+            try await renderPreferencesPreviews(rest)
         case "render-readme-assets":
             try renderReadmeAssets(rest)
         case "verify-appcast":
@@ -108,11 +108,11 @@ private struct Tool {
         print("Updated \(menuPreview.path)")
     }
 
-    private func renderPreferencesPreviews(_ arguments: [String]) throws {
+    private func renderPreferencesPreviews(_ arguments: [String]) async throws {
         guard arguments.isEmpty else { throw ToolError("Usage: pulsebar-tools render-preferences-previews") }
         let directory = root.appendingPathComponent(".build/preferences-previews")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try ReadmeAssetRenderer.writePreferencesPreviews(to: directory)
+        try await ReadmeAssetRenderer.writePreferencesPreviews(to: directory)
         print("Updated \(directory.path)")
     }
 
@@ -697,29 +697,89 @@ extension String {
 private enum ReadmeAssetRenderer {
     static func writeMenuPreview(to url: URL) throws {
         let appIcon = NSImage(contentsOf: url.deletingLastPathComponent().appendingPathComponent("app-icon.png"))
+        let preferences = try nativeImage(PreferencesSampleView(sample: .signedOut), size: NSSize(width: 560, height: 760), scheme: .light)
         let renderer = ImageRenderer(
-            content: ReadmeMenuPreview(appIcon: appIcon).environment(\.colorScheme, .light).environment(
-                \.locale, Locale(identifier: "en_US")
-            ).environment(\.timeZone, TimeZone(secondsFromGMT: 0)!))
+            content: ReadmeMenuPreview(appIcon: appIcon, preferences: preferences)
+                .environment(\.colorScheme, .light).environment(\.locale, Locale(identifier: "en_US"))
+                .environment(\.timeZone, TimeZone(secondsFromGMT: 0)!))
         renderer.scale = 2
         renderer.colorMode = .nonLinear
-
-        guard let image = renderer.nsImage else {
-            throw ToolError("failed to render README menu preview")
-        }
-
+        guard let image = renderer.nsImage else { throw ToolError("failed to render README preview") }
         try image.writePNG(to: url)
     }
 
-    static func writePreferencesPreviews(to directory: URL) throws {
+    static func writePreferencesPreviews(to directory: URL) async throws {
+        var records: [PreferencesPreviewRecord] = []
         for scheme: ColorScheme in [.light, .dark] {
             for sample in [PreferencesSample.signedIn, .signedOut, .invalidPort] {
                 let name = "\(sample.rawValue)-\(scheme == .light ? "light" : "dark").png"
-                let height: CGFloat = sample == .signedIn ? 420 : (sample == .signedOut ? 480 : 520)
-                let image = try nativeImage(PreferencesSampleView(sample: sample), size: NSSize(width: 560, height: height), scheme: scheme)
-                try image.writePNG(to: directory.appendingPathComponent(name))
+                records.append(
+                    try await adaptivePreview(
+                        sample: sample, scheme: scheme, visibleFrame: NSRect(x: 0, y: 24, width: 1440, height: 900),
+                        name: name, directory: directory))
             }
         }
+        records.append(
+            try await adaptivePreview(
+                sample: .signedIn, scheme: .dark, visibleFrame: NSRect(x: 0, y: 24, width: 1440, height: 900),
+                name: "large-text-dark.png", directory: directory, bodyFontSize: 20))
+        records.append(
+            try await adaptivePreview(
+                sample: .signedOut, scheme: .dark, visibleFrame: NSRect(x: 0, y: 24, width: 800, height: 540),
+                name: "small-screen-dark.png", directory: directory))
+        records.append(
+            try await adaptivePreview(
+                sample: .signedIn, scheme: .dark, visibleFrame: NSRect(x: 0, y: 24, width: 360, height: 900),
+                name: "narrow-screen-dark.png", directory: directory))
+        guard let regular = records.first(where: { $0.name == "signed-in-dark.png" }),
+            let larger = records.first(where: { $0.name == "large-text-dark.png" }), larger.contentSize.height > regular.contentSize.height
+        else { throw ToolError("larger text did not exercise a taller layout") }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(records).write(to: directory.appendingPathComponent("layout.json"))
+    }
+
+    private static func adaptivePreview(
+        sample: PreferencesSample, scheme: ColorScheme, visibleFrame: NSRect, name: String, directory: URL,
+        bodyFontSize: CGFloat? = nil
+    ) async throws -> PreferencesPreviewRecord {
+        _ = NSApplication.shared.setActivationPolicy(.prohibited)
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 660), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let sizing = PreferencesWindowSizing(window: window, visibleFrameProvider: { visibleFrame })
+        let view = NSHostingView(
+            rootView: PreferencesSampleView(
+                sample: sample, onContentSizeChange: { [weak sizing] size in sizing?.contentSizeDidChange(size) }
+            )
+            .environment(\.colorScheme, scheme).environment(\.locale, Locale(identifier: "en_US"))
+            .font(bodyFontSize.map { .system(size: $0) }).controlSize(bodyFontSize == nil ? .regular : .large))
+        view.sizingOptions = []
+        window.appearance = NSAppearance(named: scheme == .light ? .aqua : .darkAqua)
+        window.contentView = view
+        var previousFrame = NSRect.zero
+        var stablePasses = 0
+        for _ in 0..<30 {
+            view.layoutSubtreeIfNeeded()
+            _ = try capture(view)
+            try await Task.sleep(for: .milliseconds(10))
+            stablePasses = window.frame == previousFrame && sizing.measuredContentSize != .zero ? stablePasses + 1 : 0
+            if stablePasses >= 2 { break }
+            previousFrame = window.frame
+        }
+        guard sizing.measuredContentSize != .zero, stablePasses >= 2 else {
+            try capture(view).writePNG(to: directory.appendingPathComponent("unsettled-\(name)"))
+            throw ToolError("preferences sizing did not settle: \(name), measured \(sizing.measuredContentSize), window \(window.frame)")
+        }
+        let record = PreferencesPreviewRecord(
+            name: name, frame: window.frame, visibleFrame: visibleFrame, contentSize: sizing.measuredContentSize,
+            viewport: view.bounds.size, needsScrolling: sizing.measuredContentSize.height > view.bounds.height + 1)
+        guard visibleFrame.contains(window.frame) else { throw ToolError("preferences exceeded the display: \(name)") }
+        guard record.contentSize.width <= record.viewport.width + 1 else { throw ToolError("preferences clipped horizontally: \(name)") }
+        if name != "small-screen-dark.png", record.needsScrolling { throw ToolError("preferences unnecessarily scroll: \(name)") }
+        try capture(view).writePNG(to: directory.appendingPathComponent(name))
+        return record
     }
 
     private static func nativeImage<Content: View>(_ content: Content, size: NSSize, scheme: ColorScheme) throws -> NSImage {
@@ -735,6 +795,12 @@ private enum ReadmeAssetRenderer {
         window.contentView = view
         view.frame = NSRect(origin: .zero, size: size)
         view.layoutSubtreeIfNeeded()
+        defer { window.close() }
+        return try capture(view)
+    }
+
+    private static func capture(_ view: NSView) throws -> NSImage {
+        let size = view.bounds.size
         guard
             let bitmap = NSBitmapImageRep(
                 bitmapDataPlanes: nil, pixelsWide: Int(size.width * 2), pixelsHigh: Int(size.height * 2), bitsPerSample: 8,
@@ -744,9 +810,17 @@ private enum ReadmeAssetRenderer {
         view.cacheDisplay(in: view.bounds, to: bitmap)
         let image = NSImage(size: size)
         image.addRepresentation(bitmap)
-        window.close()
         return image
     }
+}
+
+private struct PreferencesPreviewRecord: Encodable {
+    let name: String
+    let frame: NSRect
+    let visibleFrame: NSRect
+    let contentSize: NSSize
+    let viewport: NSSize
+    let needsScrolling: Bool
 }
 
 private enum PreferencesSample: String {
@@ -757,6 +831,7 @@ private enum PreferencesSample: String {
 
 private struct PreferencesSampleView: View {
     let sample: PreferencesSample
+    var onContentSizeChange: @MainActor @Sendable (CGSize) -> Void = { _ in }
     private var state: DashboardPreferencesState {
         var state = DashboardPreferencesState(endpointAddress: "127.0.0.1:11000", accountName: sample == .signedIn ? "demo" : nil)
         state.connectionTitle = sample == .signedIn ? "Connected" : "Signed out"
@@ -772,18 +847,23 @@ private struct PreferencesSampleView: View {
     var body: some View {
         DashboardPreferencesContent(
             port: .constant(sample == .invalidPort ? "70000" : "11000"), username: .constant("demo"), password: .constant("sample"),
-            showDiagnostics: .constant(false), state: state, actions: DashboardPreferencesActions()
-        )
+            state: state, actions: DashboardPreferencesActions(), additionalCardsFirst: true,
+            onContentSizeChange: onContentSizeChange
+        ) {
+            WelcomePreferencesContent(isVisible: true, endpointAddress: "127.0.0.1:11000", dismiss: {})
+            StartupPreferencesContent(isEnabled: .constant(true), status: "Enabled", openSettings: {})
+        }
     }
 }
 
 // Rendered UI preview with fixed sample data; it does not contact services or change preferences.
 private struct ReadmeMenuPreview: View {
-    private let cardWidth: CGFloat = 720
-    private let cardHeight: CGFloat = 400
+    private let cardWidth: CGFloat = 950
+    private let cardHeight: CGFloat = 880
     private let safeInset: CGFloat = 40
 
     let appIcon: NSImage?
+    let preferences: NSImage
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -797,7 +877,7 @@ private struct ReadmeMenuPreview: View {
                         .padding(.top, 34)
 
                     menuCard
-                        .frame(width: 330)
+                        .frame(width: 560)
                         .padding(.top, 3)
                 }
                 .padding(.horizontal, safeInset)
@@ -919,62 +999,21 @@ private struct ReadmeMenuPreview: View {
 
     private var menuCard: some View {
         VStack(spacing: 0) {
-            previewRow(symbol: "network", title: "Connected")
-            plainRow("Last sample: 9:41:00 AM", secondary: true)
-            plainRow("Reconnect")
-            divider
-            previewRow(symbol: "memorychip", title: "RAM: 56% (71.68 / 128 GB)")
-            previewRow(symbol: "cpu.fill", title: "GPU: 37%")
-            divider
-            previewRow(symbol: "gearshape", title: "Preferences…", shortcut: "⌘,")
-            previewRow(symbol: "safari", title: "Open Dashboard")
-            divider
-            previewRow(symbol: "power", title: "Quit", shortcut: "⌘Q")
+            ZStack {
+                Text("PulseBar Preferences").font(.system(size: 13, weight: .semibold))
+                HStack(spacing: 8) {
+                    Circle().fill(Color(red: 1, green: 0.37, blue: 0.34)).frame(width: 12, height: 12)
+                    Circle().fill(Color(red: 1, green: 0.74, blue: 0.18)).frame(width: 12, height: 12)
+                    Circle().fill(.gray.opacity(0.25)).frame(width: 12, height: 12)
+                    Spacer()
+                }.padding(.horizontal, 14)
+            }.frame(height: 32).background(Color(nsColor: .windowBackgroundColor))
+            Divider()
+            Image(nsImage: preferences).resizable().frame(width: 560, height: 760)
         }
-        .frame(width: 330)
-        .padding(.vertical, 7)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay { RoundedRectangle(cornerRadius: 10).stroke(.white.opacity(0.65), lineWidth: 1) }
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay { RoundedRectangle(cornerRadius: 10).stroke(.white.opacity(0.65)) }
         .shadow(color: .black.opacity(0.22), radius: 18, x: 0, y: 12)
-    }
-
-    private func plainRow(_ title: String, secondary: Bool = false) -> some View {
-        Text(title)
-            .font(.system(size: 12))
-            .foregroundStyle(secondary ? .secondary : .primary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 12)
-            .frame(height: 27)
-    }
-
-    private func previewRow(symbol: String, title: String, shortcut: String? = nil) -> some View {
-        HStack(spacing: 8) {
-            Label {
-                Text(title)
-                    .lineLimit(1)
-            } icon: {
-                Image(systemName: symbol)
-                    .frame(width: 18)
-            }
-
-            Spacer(minLength: 12)
-
-            if let shortcut {
-                Text(shortcut)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .font(.system(size: 12))
-        .monospacedDigit()
-        .padding(.horizontal, 12)
-        .frame(height: 27)
-    }
-
-    private var divider: some View {
-        Rectangle()
-            .fill(.primary.opacity(0.13))
-            .frame(height: 1)
-            .padding(.vertical, 4)
     }
 }
 

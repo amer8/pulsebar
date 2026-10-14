@@ -5,7 +5,6 @@ import PulseBarUI
 import Security
 import SwiftUI
 
-private let diagnosticsPreferenceKey = "PulseBar.ShowDiagnostics"
 private var dashboardBaseURL: URL { DashboardEndpoint.current.url }
 private var dashboardLocalEndpoint: String { DashboardEndpoint.current.address }
 private var manualSSHTunnelCommand: String { DashboardEndpoint.current.tunnelCommand }
@@ -459,7 +458,6 @@ final class MetricsViewModel: ObservableObject {
 @MainActor
 struct MetricsMenuView: View {
     @ObservedObject var viewModel: MetricsViewModel
-    @AppStorage(diagnosticsPreferenceKey) private var showDiagnostics = false
     @ObservedObject private var sparkle = SparkleController.shared
     var menuState: MetricsMenuState {
         MetricsMenuState(viewModel: viewModel)
@@ -499,15 +497,6 @@ struct MetricsMenuView: View {
                 Section {
                     Text("Sign in from Preferences to connect to the local dashboard.")
                         .foregroundStyle(.secondary)
-                }
-            }
-
-            if showDiagnostics && !menuState.debugMessages.isEmpty {
-                Section("Diagnostics") {
-                    ForEach(Array(menuState.debugMessages.enumerated()), id: \.offset) { _, message in
-                        Text(message)
-                            .font(.system(size: 11, weight: .regular, design: .monospaced))
-                    }
                 }
             }
 
@@ -557,14 +546,12 @@ struct MetricsMenuView: View {
 struct MetricsMenuState {
     let connectionHealth: TelemetryConnectionHealth
     let snapshot: MetricsSnapshot
-    let debugMessages: [String]
     let isSignedIn: Bool
     let isUpdateAvailable: Bool
 
     init(viewModel: MetricsViewModel) {
         connectionHealth = viewModel.connectionHealth
         snapshot = viewModel.snapshot
-        debugMessages = viewModel.debugMessages
         isSignedIn = viewModel.isSignedIn
         isUpdateAvailable = viewModel.isUpdateAvailable
     }
@@ -1290,7 +1277,7 @@ extension Error {
 
 struct PulseBarPreferencesView: View {
     @ObservedObject var viewModel: MetricsViewModel
-    @AppStorage(diagnosticsPreferenceKey) private var showDiagnostics = false
+    var onContentSizeChange: @MainActor @Sendable (CGSize) -> Void = { _ in }
     @State private var portText = String(DashboardEndpoint.current.port)
     @State private var feedback: PreferencesFeedback?
     @State private var checking = false
@@ -1298,9 +1285,12 @@ struct PulseBarPreferencesView: View {
     var body: some View {
         DashboardPreferencesContent(
             port: $portText, username: $viewModel.username, password: $viewModel.password,
-            showDiagnostics: $showDiagnostics, state: presentation, actions: actions
-        )
-        .frame(minWidth: 520, minHeight: 420)
+            state: presentation, actions: actions, additionalCardsFirst: true,
+            onContentSizeChange: onContentSizeChange
+        ) {
+            WelcomePreferencesView()
+            LoginItemPreferencesView()
+        }
     }
 
     private var presentation: DashboardPreferencesState {
@@ -1360,6 +1350,7 @@ struct PulseBarPreferencesView: View {
 @MainActor
 enum PulseBarNavigation {
     private static var preferencesWindow: NSWindow?
+    private static var preferencesSizing: PreferencesWindowSizing?
 
     static func openPreferences(viewModel: MetricsViewModel) {
         if NSApplication.shared.activationPolicy() == .prohibited {
@@ -1367,32 +1358,41 @@ enum PulseBarNavigation {
         }
 
         if preferencesWindow == nil {
-            let hostingController = NSHostingController(
-                rootView: PulseBarPreferencesView(viewModel: viewModel)
-            )
-
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 560, height: viewModel.isSignedIn ? 420 : 480),
+                contentRect: NSRect(x: 0, y: 0, width: 520, height: 660),
                 styleMask: [.titled, .closable, .miniaturizable, .resizable],
                 backing: .buffered,
                 defer: false
             )
             window.isReleasedWhenClosed = false
+            if let screen = NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) ?? NSScreen.main {
+                let bounds = screen.visibleFrame
+                window.setFrameOrigin(NSPoint(x: bounds.midX - window.frame.width / 2, y: bounds.midY - window.frame.height / 2))
+            }
+            let sizing = PreferencesWindowSizing(window: window)
+            let hostingController = NSHostingController(
+                rootView: PulseBarPreferencesView(
+                    viewModel: viewModel, onContentSizeChange: { [weak sizing] size in sizing?.contentSizeDidChange(size) }
+                )
+            )
+            hostingController.sizingOptions = []
             window.contentViewController = hostingController
-            window.minSize = NSSize(width: 520, height: 420)
-            window.center()
             window.standardWindowButton(.zoomButton)?.isEnabled = false
 
+            preferencesSizing = sizing
             preferencesWindow = window
         } else if let window = preferencesWindow,
             let hostingController = window.contentViewController as? NSHostingController<PulseBarPreferencesView>
         {
-            hostingController.rootView = PulseBarPreferencesView(viewModel: viewModel)
+            hostingController.rootView = PulseBarPreferencesView(
+                viewModel: viewModel, onContentSizeChange: { size in preferencesSizing?.contentSizeDidChange(size) })
         }
 
         preferencesWindow?.title = "PulseBar Preferences"
         preferencesWindow?.titleVisibility = .visible
         preferencesWindow?.titlebarAppearsTransparent = false
+        preferencesWindow?.contentView?.layoutSubtreeIfNeeded()
+        preferencesSizing?.fitContent()
         preferencesWindow?.makeKeyAndOrderFront(nil)
         NSApplication.shared.activate(ignoringOtherApps: true)
         preferencesWindow?.orderFrontRegardless()

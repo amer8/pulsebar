@@ -106,7 +106,7 @@ Run `make check` and `swift run PulseBar`. For a local fixture, run
 `python3 Scripts/dashboard-simulator.py --port 11001` in another terminal, set port 11001
 in Preferences, and sign in with `demo` / `demo`. The existing telemetry menu is retained.
 
-Preferences uses compact connection, account, and diagnostics cards. The app and standalone Preferences
+Preferences uses compact connection and account cards. The app and standalone Preferences
 renderer share the same SwiftUI layout in `Sources/PulseBarUI`. To inspect signed-in,
 sign-in, and invalid-port states in both light and dark mode without saved credentials:
 
@@ -116,3 +116,20 @@ swift run pulsebar-tools render-preferences-previews
 
 The previews are saved in `.build/preferences-previews/`. This feature keeps the README
 image, caption, and image dimensions identical to `main`.
+
+## Launch at Login Feature
+
+This independent branch adds opt-in startup registration, actual macOS registration status,
+approval and error feedback, and a first-run welcome in Preferences. Run `make check` for
+the fake-service tests. Run `make install` and open `~/Applications/PulseBar.app` to test
+registration from an installed app. It uses the original telemetry menu and dashboard
+connection settings. The tests do not register a real login item.
+
+Preferences starts at a compact width and fits its rendered content, including the welcome
+guide, sign-in fields, and status messages. Its complete window frame is capped by the
+current display's usable area; smaller displays retain scrolling. Content changes and
+display changes trigger a refit, and narrower layouts stack connection actions.
+
+`swift run pulsebar-tools render-preferences-previews` also verifies larger body text,
+narrow and short displays, and writes the measured content and window sizes to
+`.build/preferences-previews/layout.json`.
