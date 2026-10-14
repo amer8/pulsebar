@@ -83,7 +83,7 @@ The current implementation expects `gpu_telemetry` SSE events shaped like this:
 
 ## Connection Health Feature
 
-This independent branch adds connection state, the last-sample timestamp, and a Reconnect
+Connection health includes connection state, the last-sample timestamp, and a Reconnect
 action to the existing menu. It detects stale telemetry after 30 seconds, uses bounded
 reconnect delays, and reconnects after wake.
 
@@ -100,7 +100,7 @@ to exercise failures. Connection health is part of the merged main branch.
 
 ## Guided Setup Feature
 
-This independent branch adds a local-port setting, a dashboard connection check, NVIDIA
+Guided setup includes a local-port setting, a dashboard connection check, NVIDIA
 Sync and SSH setup actions, and inline login errors. Saved sessions are isolated by port.
 Run `make check` and `swift run PulseBar`. For a local fixture, run
 `python3 Scripts/dashboard-simulator.py --port 11001` in another terminal, set port 11001
@@ -119,7 +119,7 @@ image, caption, and image dimensions identical to `main`.
 
 ## Launch at Login Feature
 
-This independent branch adds opt-in startup registration, actual macOS registration status,
+Launch at login includes opt-in startup registration, actual macOS registration status,
 approval and error feedback, and a first-run welcome in Preferences. Run `make check` for
 the fake-service tests. Run `make install` and open `~/Applications/PulseBar.app` to test
 registration from an installed app. It uses the original telemetry menu and dashboard
@@ -133,3 +133,31 @@ display changes trigger a refit, and narrower layouts stack connection actions.
 `swift run pulsebar-tools render-preferences-previews` also verifies larger body text,
 narrow and short displays, and writes the measured content and window sizes to
 `.build/preferences-previews/layout.json`.
+
+## Telemetry History Feature
+
+Telemetry history includes a live panel with bounded RAM/GPU charts, time windows, peaks,
+free memory, and menu-bar display options in Preferences. The panel also shows connection status and
+a Reconnect action inherited from main. Run `make check` and `swift run PulseBar --demo`
+for synthetic telemetry without reading saved dashboard credentials. Omit `--demo` to use
+the dashboard at port 11000. The demo is specific to this branch.
+
+The panel has an explicit opening viewport so the menu-bar window cannot collapse its
+scroll view. Layout regression tests exercise compressed opening sizes and repeated opens.
+To capture the actual app panel during layout regression tests:
+
+```bash
+mkdir -p .build/history-panel-previews
+PULSEBAR_LAYOUT_PREVIEW_DIR="$PWD/.build/history-panel-previews" swift test --filter MetricsDetailLayoutTests
+```
+
+The panel and README preview share `TelemetryHistoryPanel` in `Sources/PulseBarUI`.
+The Trends layout puts current readings and peaks beside separate RAM/GPU charts.
+Auto scales start at zero, with a minimum 5% range; the scale button switches both charts
+to 0–100% for comparison. Relative time labels avoid clipped clock labels. The Menu Bar
+card in Preferences retains the existing display preference, so previously selected modes
+continue to apply.
+
+To render the shared panel in light and dark mode with live, low-use, full-scale,
+reconnecting, and signed-out sample states, run `swift run pulsebar-tools render-history-previews`.
+Images are saved in `.build/history-panel-previews/`.

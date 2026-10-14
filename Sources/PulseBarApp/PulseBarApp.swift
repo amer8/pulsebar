@@ -1,9 +1,10 @@
 import AppKit
+import PulseBarUI
 import SwiftUI
 
 @MainActor
 struct PulseBarApp: App {
-    private let viewModel = MetricsViewModel()
+    private let viewModel = MetricsViewModel(demo: CommandLine.arguments.contains("--demo"))
 
     init() {
         if !UserDefaults.standard.bool(forKey: "PulseBar.HasSeenWelcome") {
@@ -14,11 +15,11 @@ struct PulseBarApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            MetricsMenuView(viewModel: viewModel)
+            MetricsDetailView(viewModel: viewModel)
         } label: {
             MenuBarStatusItemLabel(viewModel: viewModel)
         }
-        .menuBarExtraStyle(.menu)
+        .menuBarExtraStyle(.window)
         .commands {
             PulseBarCommands(viewModel: viewModel)
         }
@@ -28,6 +29,7 @@ struct PulseBarApp: App {
 @MainActor
 private struct MenuBarStatusItemLabel: View {
     @ObservedObject var viewModel: MetricsViewModel
+    @AppStorage(MenuBarDisplay.preferenceKey) private var display = MenuBarDisplay.both.rawValue
 
     var body: some View {
         if let menuBarImage = menuBarLabelImage {
@@ -42,7 +44,7 @@ private struct MenuBarStatusItemLabel: View {
 
     private var menuBarLabelImage: NSImage? {
         let renderer = ImageRenderer(
-            content: MenuBarLabelView(snapshot: viewModel.snapshot)
+            content: MenuBarLabelView(snapshot: viewModel.snapshot).id(display)
         )
         renderer.scale = NSScreen.main?.backingScaleFactor ?? 2
 
@@ -57,13 +59,22 @@ private struct MenuBarStatusItemLabel: View {
 
 private struct MenuBarLabelView: View {
     let snapshot: MetricsSnapshot
+    @AppStorage(MenuBarDisplay.preferenceKey) private var display = MenuBarDisplay.both.rawValue
 
     var body: some View {
         HStack(spacing: 6) {
-            Image(systemName: "memorychip")
-            Text(snapshot.memory.percentText)
-            Image(systemName: "cpu.fill")
-            Text(snapshot.gpu.menuBarText)
+            if display == MenuBarDisplay.icon.rawValue {
+                Image(systemName: "waveform.path.ecg")
+            } else {
+                if display != MenuBarDisplay.gpu.rawValue {
+                    Image(systemName: "memorychip")
+                    Text(snapshot.memory.percentText)
+                }
+                if display != MenuBarDisplay.memory.rawValue {
+                    Image(systemName: "cpu.fill")
+                    Text(snapshot.gpu.menuBarText)
+                }
+            }
         }
         .font(.system(size: NSFont.menuBarFont(ofSize: 0).pointSize))
         .monospacedDigit()

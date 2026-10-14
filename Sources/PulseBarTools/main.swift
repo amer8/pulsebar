@@ -48,6 +48,8 @@ private struct Tool {
             try makeAppcast(rest)
         case "release":
             try release(rest)
+        case "render-history-previews":
+            try renderHistoryPreviews(rest)
         case "render-preferences-previews":
             try await renderPreferencesPreviews(rest)
         case "render-readme-assets":
@@ -73,6 +75,7 @@ private struct Tool {
               pulsebar-tools release
               pulsebar-tools render-readme-assets
               pulsebar-tools render-preferences-previews
+              pulsebar-tools render-history-previews
               pulsebar-tools verify-appcast <appcast.xml> <version>
 
             Environment used by release/appcast:
@@ -106,6 +109,14 @@ private struct Tool {
         let menuPreview = assetDirectory.appendingPathComponent("menu-preview.png")
         try ReadmeAssetRenderer.writeMenuPreview(to: menuPreview)
         print("Updated \(menuPreview.path)")
+    }
+
+    private func renderHistoryPreviews(_ arguments: [String]) throws {
+        guard arguments.isEmpty else { throw ToolError("Usage: pulsebar-tools render-history-previews") }
+        let directory = root.appendingPathComponent(".build/history-panel-previews")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try ReadmeAssetRenderer.writeHistoryPreviews(to: directory)
+        print("Updated \(directory.path)")
     }
 
     private func renderPreferencesPreviews(_ arguments: [String]) async throws {
@@ -697,15 +708,81 @@ extension String {
 private enum ReadmeAssetRenderer {
     static func writeMenuPreview(to url: URL) throws {
         let appIcon = NSImage(contentsOf: url.deletingLastPathComponent().appendingPathComponent("app-icon.png"))
-        let preferences = try nativeImage(PreferencesSampleView(sample: .signedOut), size: NSSize(width: 560, height: 760), scheme: .light)
+        let reference = Date(timeIntervalSince1970: 1_700_041_260)
+        let state = historySample(at: reference)
+        let panel = try nativeImage(
+            TelemetryHistoryPanel(state: state, now: reference, historySeconds: .constant(300), actions: TelemetryPanelActions()),
+            size: TelemetryHistoryPanel.preferredSize(for: state), scheme: .light)
         let renderer = ImageRenderer(
-            content: ReadmeMenuPreview(appIcon: appIcon, preferences: preferences)
+            content: ReadmeMenuPreview(appIcon: appIcon, panel: panel)
                 .environment(\.colorScheme, .light).environment(\.locale, Locale(identifier: "en_US"))
                 .environment(\.timeZone, TimeZone(secondsFromGMT: 0)!))
         renderer.scale = 2
         renderer.colorMode = .nonLinear
         guard let image = renderer.nsImage else { throw ToolError("failed to render README preview") }
         try image.writePNG(to: url)
+    }
+
+    private static func historySample(at reference: Date) -> TelemetryPanelState {
+        var state = TelemetryPanelState(connectionTitle: "Connected")
+        state.isLive = true
+        state.canReconnect = true
+        state.lastSampleAt = reference
+        state.memoryPercent = 56
+        state.gpuPercent = 37
+        state.usedMemoryGiB = 71.68
+        state.totalMemoryGiB = 128
+        state.freeMemoryGiB = 56.32
+        let values: [(Double, Double)] = [
+            (41, 17), (44, 34), (46, 61), (45, 48), (49, 72), (52, 67), (58, 84), (61, 59), (59, 68), (57, 49), (56, 37),
+        ]
+        state.points = values.enumerated().map { index, value in
+            TelemetryChartPoint(
+                timestamp: reference.addingTimeInterval(Double(index - 10) * 30), memoryPercent: value.0, gpuPercent: value.1)
+        }
+        return state
+    }
+
+    static func writeHistoryPreviews(to directory: URL) throws {
+        let reference = Date(timeIntervalSince1970: 1_700_041_260)
+        for scheme: ColorScheme in [.light, .dark] {
+            for name in ["live", "low-use", "full-scale", "reconnecting", "signed-out"] {
+                var state = historySample(at: reference)
+                switch name {
+                case "low-use", "full-scale":
+                    state.memoryPercent = 2
+                    state.gpuPercent = 0
+                    state.usedMemoryGiB = 2.58
+                    state.totalMemoryGiB = 122
+                    state.freeMemoryGiB = 119.11
+                    state.systemUpdateAvailable = true
+                    state.points = state.points.map {
+                        TelemetryChartPoint(timestamp: $0.timestamp, memoryPercent: 2, gpuPercent: 0)
+                    }
+                case "reconnecting":
+                    state.connectionTitle = "Reconnecting…"
+                    state.isLive = false
+                    state.needsAttention = true
+                    state.lastSampleAt = reference.addingTimeInterval(-35)
+                    state.memoryPercent = nil
+                    state.gpuPercent = nil
+                    state.usedMemoryGiB = nil
+                    state.totalMemoryGiB = nil
+                    state.freeMemoryGiB = nil
+                    state.note = "Waiting for the dashboard. Your recent history is preserved."
+                case "signed-out":
+                    state = TelemetryPanelState(connectionTitle: "Signed out")
+                    state.needsSignIn = true
+                default: break
+                }
+                let panel = try nativeImage(
+                    TelemetryHistoryPanel(
+                        state: state, now: reference, historySeconds: .constant(300), actions: TelemetryPanelActions(),
+                        automaticScale: name != "full-scale"),
+                    size: TelemetryHistoryPanel.preferredSize(for: state), scheme: scheme)
+                try panel.writePNG(to: directory.appendingPathComponent("panel-\(name)-\(scheme == .light ? "light" : "dark").png"))
+            }
+        }
     }
 
     static func writePreferencesPreviews(to directory: URL) async throws {
@@ -852,18 +929,19 @@ private struct PreferencesSampleView: View {
         ) {
             WelcomePreferencesContent(isVisible: true, endpointAddress: "127.0.0.1:11000", dismiss: {})
             StartupPreferencesContent(isEnabled: .constant(true), status: "Enabled", openSettings: {})
+            MenuBarPreferencesContent(display: .constant(.both))
         }
     }
 }
 
 // Rendered UI preview with fixed sample data; it does not contact services or change preferences.
 private struct ReadmeMenuPreview: View {
-    private let cardWidth: CGFloat = 950
-    private let cardHeight: CGFloat = 880
+    private let cardWidth: CGFloat = 830
+    private let cardHeight: CGFloat = 610
     private let safeInset: CGFloat = 40
 
     let appIcon: NSImage?
-    let preferences: NSImage
+    let panel: NSImage
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -877,7 +955,7 @@ private struct ReadmeMenuPreview: View {
                         .padding(.top, 34)
 
                     menuCard
-                        .frame(width: 560)
+                        .frame(width: 440, alignment: .leading)
                         .padding(.top, 3)
                 }
                 .padding(.horizontal, safeInset)
@@ -998,22 +1076,11 @@ private struct ReadmeMenuPreview: View {
     }
 
     private var menuCard: some View {
-        VStack(spacing: 0) {
-            ZStack {
-                Text("PulseBar Preferences").font(.system(size: 13, weight: .semibold))
-                HStack(spacing: 8) {
-                    Circle().fill(Color(red: 1, green: 0.37, blue: 0.34)).frame(width: 12, height: 12)
-                    Circle().fill(Color(red: 1, green: 0.74, blue: 0.18)).frame(width: 12, height: 12)
-                    Circle().fill(.gray.opacity(0.25)).frame(width: 12, height: 12)
-                    Spacer()
-                }.padding(.horizontal, 14)
-            }.frame(height: 32).background(Color(nsColor: .windowBackgroundColor))
-            Divider()
-            Image(nsImage: preferences).resizable().frame(width: 560, height: 760)
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .overlay { RoundedRectangle(cornerRadius: 10).stroke(.white.opacity(0.65)) }
-        .shadow(color: .black.opacity(0.22), radius: 18, x: 0, y: 12)
+        Image(nsImage: panel)
+            .resizable().frame(width: panel.size.width, height: panel.size.height)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .overlay { RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.4), lineWidth: 0.5) }
+            .shadow(color: .black.opacity(0.22), radius: 18, x: 0, y: 12)
     }
 }
 

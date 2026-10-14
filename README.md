@@ -1,8 +1,8 @@
 
 <p align="center">
-  <img src="docs/assets/menu-preview.png" alt="The welcome guide and launch-at-login setting in PulseBar Preferences." width="950">
+  <img src="docs/assets/menu-preview.png" alt="Separate RAM and GPU history charts with adaptive scales." width="830">
   <br>
-  <em>The welcome guide and launch-at-login setting in PulseBar Preferences. Rendered preview with sample data.</em>
+  <em>Separate RAM and GPU history charts with adaptive scales. Rendered preview with sample data.</em>
 </p>
 
 [![CI](https://github.com/amer8/pulsebar/actions/workflows/quality.yml/badge.svg?branch=main)](https://github.com/amer8/pulsebar/actions/workflows/quality.yml)
