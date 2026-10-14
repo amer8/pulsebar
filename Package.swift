@@ -25,7 +25,14 @@ let package = Package(
             dependencies: [
                 .product(name: "Sparkle", package: "Sparkle")
             ],
-            path: "Sources/PulseBarApp"
+            path: "Sources/PulseBarApp",
+            linkerSettings: [
+                .unsafeFlags(
+                    [
+                        "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks",
+                        "-Xlinker", "-rpath", "-Xlinker", "@executable_path",
+                    ], .when(platforms: [.macOS]))
+            ]
         ),
         .executableTarget(
             name: "PulseBarTools",

@@ -685,8 +685,12 @@ extension String {
 private enum ReadmeAssetRenderer {
     static func writeMenuPreview(to url: URL) throws {
         let appIcon = NSImage(contentsOf: url.deletingLastPathComponent().appendingPathComponent("app-icon.png"))
-        let renderer = ImageRenderer(content: ReadmeMenuPreview(appIcon: appIcon))
-        renderer.scale = 1
+        let renderer = ImageRenderer(
+            content: ReadmeMenuPreview(appIcon: appIcon).environment(\.colorScheme, .light).environment(
+                \.locale, Locale(identifier: "en_US")
+            ).environment(\.timeZone, TimeZone(secondsFromGMT: 0)!))
+        renderer.scale = 2
+        renderer.colorMode = .nonLinear
 
         guard let image = renderer.nsImage else {
             throw ToolError("failed to render README menu preview")
@@ -696,9 +700,10 @@ private enum ReadmeAssetRenderer {
     }
 }
 
+// Rendered UI preview with fixed sample data; it does not contact services or change preferences.
 private struct ReadmeMenuPreview: View {
-    private let cardWidth: CGFloat = 640
-    private let cardHeight: CGFloat = 320
+    private let cardWidth: CGFloat = 720
+    private let cardHeight: CGFloat = 400
     private let safeInset: CGFloat = 40
 
     let appIcon: NSImage?
@@ -715,6 +720,7 @@ private struct ReadmeMenuPreview: View {
                         .padding(.top, 34)
 
                     menuCard
+                        .frame(width: 330)
                         .padding(.top, 3)
                 }
                 .padding(.horizontal, safeInset)
@@ -756,7 +762,7 @@ private struct ReadmeMenuPreview: View {
                     .init(color: Color(red: 0.64, green: 0.0, blue: 0.82), location: 1.0),
                 ],
                 startPoint: .topLeading,
-                endPoint: .bottomTrailing
+                endPoint: UnitPoint(x: 640 / cardWidth, y: 320 / cardHeight)
             )
 
             Capsule()
@@ -772,7 +778,7 @@ private struct ReadmeMenuPreview: View {
                 )
                 .frame(width: 210, height: 560)
                 .rotationEffect(.degrees(-20))
-                .offset(x: -110, y: 140)
+                .offset(x: -110 - (cardWidth - 640) / 2, y: 140 - (cardHeight - 320) / 2)
                 .blur(radius: 34)
 
             Capsule()
@@ -788,7 +794,7 @@ private struct ReadmeMenuPreview: View {
                 )
                 .frame(width: 300, height: 230)
                 .rotationEffect(.degrees(11))
-                .offset(x: 190, y: -24)
+                .offset(x: 190 - (cardWidth - 640) / 2, y: -24 - (cardHeight - 320) / 2)
                 .blur(radius: 26)
 
             LinearGradient(
@@ -798,7 +804,7 @@ private struct ReadmeMenuPreview: View {
                     Color.black.opacity(0.08),
                 ],
                 startPoint: .top,
-                endPoint: .bottom
+                endPoint: UnitPoint(x: 0.5, y: 320 / cardHeight)
             )
         }
         .frame(width: cardWidth, height: cardHeight)
@@ -831,35 +837,37 @@ private struct ReadmeMenuPreview: View {
         .foregroundStyle(.primary)
         .padding(.horizontal, safeInset)
         .frame(height: 32)
-        .background(.ultraThinMaterial)
+        .background(.white.opacity(0.18))
     }
 
     private var menuCard: some View {
         VStack(spacing: 0) {
-            VStack(spacing: 0) {
-                previewRow(symbol: "memorychip", title: "RAM: 56% (71.68 / 128 GB)")
-                previewRow(symbol: "cpu.fill", title: "GPU: 37%")
-            }
-
+            previewRow(symbol: "network", title: "Connected")
+            plainRow("Last sample: 9:41:00 AM", secondary: true)
+            plainRow("Reconnect")
             divider
-
-            VStack(spacing: 0) {
-                previewRow(symbol: "gearshape", title: "Preferences…", shortcut: "⌘,")
-                previewRow(symbol: "safari", title: "Open Dashboard")
-            }
-
+            previewRow(symbol: "memorychip", title: "RAM: 56% (71.68 / 128 GB)")
+            previewRow(symbol: "cpu.fill", title: "GPU: 37%")
             divider
-
+            previewRow(symbol: "gearshape", title: "Preferences…", shortcut: "⌘,")
+            previewRow(symbol: "safari", title: "Open Dashboard")
+            divider
             previewRow(symbol: "power", title: "Quit", shortcut: "⌘Q")
         }
-        .frame(width: 250)
+        .frame(width: 330)
         .padding(.vertical, 7)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(.white.opacity(0.65), lineWidth: 1)
-        }
+        .overlay { RoundedRectangle(cornerRadius: 10).stroke(.white.opacity(0.65), lineWidth: 1) }
         .shadow(color: .black.opacity(0.22), radius: 18, x: 0, y: 12)
+    }
+
+    private func plainRow(_ title: String, secondary: Bool = false) -> some View {
+        Text(title)
+            .font(.system(size: 12))
+            .foregroundStyle(secondary ? .secondary : .primary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+            .frame(height: 27)
     }
 
     private func previewRow(symbol: String, title: String, shortcut: String? = nil) -> some View {
@@ -895,13 +903,19 @@ private struct ReadmeMenuPreview: View {
 
 extension NSImage {
     fileprivate func writePNG(to url: URL) throws {
+        // Eight-bit sRGB preserves crisp Retina text without oversized 16-bit PNGs.
         guard let tiffRepresentation,
             let bitmap = NSBitmapImageRep(data: tiffRepresentation),
-            let data = bitmap.representation(using: .png, properties: [:])
-        else {
-            throw ToolError("failed to encode PNG: \(url.path)")
-        }
-
+            let image = bitmap.cgImage,
+            let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
+            let context = CGContext(
+                data: nil, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: 0,
+                space: colorSpace, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { throw ToolError("failed to create PNG bitmap: \(url.path)") }
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        guard let output = context.makeImage(),
+            let data = NSBitmapImageRep(cgImage: output).representation(using: .png, properties: [:])
+        else { throw ToolError("failed to encode PNG: \(url.path)") }
         try data.write(to: url, options: .atomic)
     }
 }
