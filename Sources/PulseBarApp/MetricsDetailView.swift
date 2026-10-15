@@ -5,6 +5,7 @@ import SwiftUI
 struct MetricsDetailView: View {
     @ObservedObject var viewModel: MetricsViewModel
     @State private var historySeconds = 300
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
@@ -36,8 +37,15 @@ struct MetricsDetailView: View {
     private var actions: TelemetryPanelActions {
         var actions = TelemetryPanelActions()
         actions.reconnect = { viewModel.refresh() }
-        actions.openDashboard = { PulseBarNavigation.openDashboard() }
-        actions.openPreferences = { PulseBarNavigation.openPreferences(viewModel: viewModel) }
+        actions.openDashboard = {
+            dismiss()
+            PulseBarNavigation.openDashboard()
+        }
+        actions.openPreferences = {
+            dismiss()
+            PulseBarNavigation.openPreferences(viewModel: viewModel)
+        }
+        actions.quit = { viewModel.quit() }
         return actions
     }
 }

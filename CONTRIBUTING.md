@@ -158,6 +158,9 @@ to 0–100% for comparison. Relative time labels avoid clipped clock labels. The
 card in Preferences retains the existing display preference, so previously selected modes
 continue to apply.
 
+The actions menu (⋯) in the panel header opens Preferences or the dashboard and quits
+PulseBar. Preferences and Quit also retain their ⌘, and ⌘Q shortcuts.
+
 To render the shared panel in light and dark mode with live, low-use, full-scale,
 reconnecting, and signed-out sample states, run `swift run pulsebar-tools render-history-previews`.
 Images are saved in `.build/history-panel-previews/`.

@@ -39,6 +39,7 @@ public struct TelemetryPanelActions {
     public var reconnect: () -> Void = {}
     public var openDashboard: () -> Void = {}
     public var openPreferences: () -> Void = {}
+    public var quit: () -> Void = {}
     public init() {}
 }
 
@@ -130,6 +131,19 @@ public struct TelemetryHistoryPanel: View {
                     .buttonStyle(.plain).foregroundStyle(.secondary)
                     .help("Reconnect to dashboard").accessibilityLabel("Reconnect to dashboard")
             }
+            Menu {
+                Button(action: actions.openPreferences) { Label("Preferences…", systemImage: "gearshape") }
+                    .keyboardShortcut(",", modifiers: .command)
+                Button(action: actions.openDashboard) { Label("Open Dashboard", systemImage: "safari") }
+                Divider()
+                Button(action: actions.quit) { Label("Quit PulseBar", systemImage: "power") }
+                    .keyboardShortcut("q", modifiers: .command)
+            } label: {
+                Image(systemName: "ellipsis.circle").font(.system(size: 16)).padding(6)
+            }
+            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+            .foregroundStyle(.secondary)
+            .help("Preferences, dashboard, and quit").accessibilityLabel("PulseBar actions")
         }
     }
 
