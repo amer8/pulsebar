@@ -939,6 +939,7 @@ private struct ReadmeMenuPreview: View {
     private let cardWidth: CGFloat = 830
     private let cardHeight: CGFloat = 610
     private let safeInset: CGFloat = 40
+    private let menuBarTopInset: CGFloat = 32
 
     let appIcon: NSImage?
     let panel: NSImage
@@ -960,9 +961,13 @@ private struct ReadmeMenuPreview: View {
                 }
                 .padding(.horizontal, safeInset)
             }
-            .padding(.top, 32)
+            .padding(.top, menuBarTopInset)
         }
         .frame(width: cardWidth, height: cardHeight)
+        // Crop the composition while preserving the desktop artwork and branding.
+        .offset(y: -menuBarTopInset)
+        .frame(width: cardWidth, height: panel.size.height + 64, alignment: .top)
+        .clipped()
     }
 
     private var titleBlock: some View {
