@@ -5,6 +5,13 @@ import SwiftUI
 struct PulseBarApp: App {
     private let viewModel = MetricsViewModel()
 
+    init() {
+        if !UserDefaults.standard.bool(forKey: "PulseBar.HasSeenWelcome") {
+            let model = viewModel
+            DispatchQueue.main.async { PulseBarNavigation.openPreferences(viewModel: model) }
+        }
+    }
+
     var body: some Scene {
         MenuBarExtra {
             MetricsMenuView(viewModel: viewModel)

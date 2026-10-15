@@ -43,7 +43,7 @@ let package = Package(
         .target(name: "PulseBarUI", path: "Sources/PulseBarUI"),
         .testTarget(
             name: "PulseBarAppTests",
-            dependencies: ["PulseBarApp"],
+            dependencies: ["PulseBarApp", "PulseBarUI"],
             path: "Tests/PulseBarAppTests"
         ),
     ]
