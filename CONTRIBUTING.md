@@ -41,6 +41,18 @@ The generated disk image is written to `.build/release/artifacts/PulseBar-<versi
 
 Local unsigned builds keep the updater disabled. Signed direct-download builds can check for app updates from the PulseBar menu.
 
+## Publishing a Release
+
+1. Set `MARKETING_VERSION` and a numeric `BUILD_NUMBER` in `version.env`. The build number must exceed every published build. Keep the version fields in `Packaging/Info.plist` in sync.
+2. Add a dated section for the version at the top of `CHANGELOG.md`, then run `make check`.
+3. Set `CODESIGN_IDENTITY` to a Developer ID Application certificate and `SPARKLE_PUBLIC_ED_KEY` to the existing Sparkle public key. The default notarization Keychain profile is `pulsebar-notary`; override it with `NOTARY_PROFILE` if needed.
+4. Run `make release-artifacts`. It signs and notarizes the app, staples its ticket, packages the ZIP and dSYM, and creates and notarizes the DMG. Artifacts are written to `.build/release/artifacts/`.
+5. Generate release notes with `swift run pulsebar-tools generate-release-notes <version> <output.md>`. Generate the Sparkle appcast from the final ZIP using the existing signing key, and verify its version, build number, download URL, signature, and archive size. Sparkle's `generate_appcast` tool can use the Keychain directly.
+6. Commit the release metadata, push the release commit and its `v<version>` tag, and publish a GitHub release containing the app ZIP, dSYM ZIP, and DMG. Publish the updated `appcast.xml` after the download assets are available.
+7. Run `swift run pulsebar-tools check-release-assets v<version>`. Update `Casks/pulsebar.rb` in `amer8/homebrew-tap` with the version and the final DMG's SHA-256 checksum.
+
+Preserve the existing Sparkle signing key so installed copies can verify updates.
+
 ## Checks
 
 ```bash
