@@ -14,7 +14,10 @@ private let updateAvailabilityRetryInterval: Duration = .seconds(30)
 @MainActor
 final class MetricsViewModel: ObservableObject {
     @Published private(set) var connectionHealth = TelemetryConnectionHealth()
-    @Published private(set) var snapshot: MetricsSnapshot
+    @Published private(set) var history = TelemetryHistory()
+    @Published private(set) var snapshot: MetricsSnapshot {
+        didSet { if snapshot.gpu.utilizationPercent == nil { history.markGap() } }
+    }
     @Published private(set) var debugMessages: [String] = []
     @Published private(set) var isUpdateAvailable = false
     @Published private(set) var endpoint = DashboardEndpoint.current
@@ -46,13 +49,14 @@ final class MetricsViewModel: ObservableObject {
     init(
         syncAppMonitor: NVIDIASyncAppMonitor = .live,
         dashboard: DashboardClient? = nil,
-        sessionStore: (any DashboardSessionStoring)? = nil
+        sessionStore: (any DashboardSessionStoring)? = nil,
+        demo: Bool = false
     ) {
         let endpoint = DashboardEndpoint.current
         let dashboard = dashboard ?? DashboardClient(baseURL: endpoint.url)
         let sessionStore = sessionStore ?? DashboardSessionStore(endpoint: endpoint)
-        let username = sessionStore.loadUsername()
-        let authToken = sessionStore.loadToken()
+        let username = demo ? "Demo" : sessionStore.loadUsername()
+        let authToken = demo ? nil : sessionStore.loadToken()
 
         self.dashboard = dashboard
         self.syncAppMonitor = syncAppMonitor
@@ -66,9 +70,14 @@ final class MetricsViewModel: ObservableObject {
         } else {
             self.username = ""
             self.snapshot = .signedOut()
-            sessionStore.clearUsername()
+            if !demo { sessionStore.clearUsername() }
         }
 
+        if demo {
+            self.username = "Demo"
+            startDemo()
+            return
+        }
         if let authToken {
             connectionHealth.beginConnection()
             log("Loaded saved dashboard session for '\(username)'.")
@@ -100,6 +109,22 @@ final class MetricsViewModel: ObservableObject {
         guard let authToken, connectionHealth.markStale(at: date) else { return }
         snapshot = snapshot.replacingTelemetryUnavailable(note: "Telemetry is stale. Reconnecting…", statusText: "Stale", timestamp: date)
         startStream(using: authToken)
+    }
+
+    private func startDemo() {
+        streamTask = Task {
+            var tick = 0.0
+            while !Task.isCancelled {
+                let sample = TelemetrySample(
+                    gpuUtilizationPercent: 50 + 40 * sin(tick / 10), memoryTotalMB: 131_072,
+                    memoryAvailableMB: 65_536 + 24_000 * cos(tick / 15))
+                connectionHealth.sampleReceived(at: .now)
+                history.append(sample, at: .now)
+                snapshot = .live(sample)
+                tick += 1
+                do { try await Task.sleep(for: .seconds(1)) } catch { return }
+            }
+        }
     }
 
     deinit {
@@ -195,6 +220,7 @@ final class MetricsViewModel: ObservableObject {
         sessionStore.clearUsername()
         sessionStore.clearToken()
         connectionHealth = TelemetryConnectionHealth()
+        history = TelemetryHistory()
         snapshot = .signedOut(note: "Signed out. Sign in again to resume metrics.")
         log("Signed out and cleared saved username and token.")
     }
@@ -214,6 +240,7 @@ final class MetricsViewModel: ObservableObject {
         password = ""
         isUpdateAvailable = false
         retryFailures = 0
+        history = TelemetryHistory()
         connectionHealth = TelemetryConnectionHealth()
         snapshot = authToken == nil ? .signedOut() : .connecting(username: username)
         if let authToken {
@@ -280,6 +307,8 @@ final class MetricsViewModel: ObservableObject {
                                 return
                             }
 
+                            guard TelemetryHistory.accepts(sample) else { return }
+                            self.history.append(sample, at: .now)
                             let usedGiB = max((sample.memoryTotalMB - sample.memoryAvailableMB) / 1024, 0)
                             let totalGiB = max(sample.memoryTotalMB / 1024, 0).rounded(.up)
                             self.log(
@@ -1290,6 +1319,7 @@ struct PulseBarPreferencesView: View {
         ) {
             WelcomePreferencesView()
             LoginItemPreferencesView()
+            MenuBarPreferencesView()
         }
     }
 
