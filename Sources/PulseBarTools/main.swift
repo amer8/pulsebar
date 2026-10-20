@@ -50,6 +50,8 @@ private struct Tool {
             try release(rest)
         case "render-history-previews":
             try renderHistoryPreviews(rest)
+        case "render-about-previews":
+            try renderAboutPreviews(rest)
         case "render-preferences-previews":
             try await renderPreferencesPreviews(rest)
         case "render-readme-assets":
@@ -76,6 +78,7 @@ private struct Tool {
               pulsebar-tools render-readme-assets
               pulsebar-tools render-preferences-previews
               pulsebar-tools render-history-previews
+              pulsebar-tools render-about-previews
               pulsebar-tools verify-appcast <appcast.xml> <version>
 
             Environment used by release/appcast:
@@ -116,6 +119,19 @@ private struct Tool {
         let directory = root.appendingPathComponent(".build/history-panel-previews")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try ReadmeAssetRenderer.writeHistoryPreviews(to: directory)
+        print("Updated \(directory.path)")
+    }
+
+    private func renderAboutPreviews(_ arguments: [String]) throws {
+        guard arguments.isEmpty else { throw ToolError("Usage: pulsebar-tools render-about-previews") }
+        let directory = root.appendingPathComponent(".build/about-previews")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let data = try Data(contentsOf: root.appendingPathComponent("Packaging/Info.plist"))
+        guard let info = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else {
+            throw ToolError("Could not read app metadata for the About preview")
+        }
+        let icon = NSImage(contentsOf: root.appendingPathComponent("docs/assets/app-icon.png"))
+        try ReadmeAssetRenderer.writeAboutPreviews(information: PulseBarAppInformation(infoDictionary: info), appIcon: icon, to: directory)
         print("Updated \(directory.path)")
     }
 
@@ -782,6 +798,16 @@ private enum ReadmeAssetRenderer {
                     size: TelemetryHistoryPanel.preferredSize(for: state), scheme: scheme)
                 try panel.writePNG(to: directory.appendingPathComponent("panel-\(name)-\(scheme == .light ? "light" : "dark").png"))
             }
+        }
+    }
+
+    static func writeAboutPreviews(information: PulseBarAppInformation, appIcon: NSImage?, to directory: URL) throws {
+        for scheme: ColorScheme in [.light, .dark] {
+            let content = PulseBarAboutContent(information: information, appIcon: appIcon)
+            let host = NSHostingController(rootView: content)
+            let size = host.sizeThatFits(in: NSSize(width: 320, height: 1000))
+            let image = try nativeImage(content, size: size, scheme: scheme)
+            try image.writePNG(to: directory.appendingPathComponent("about-\(scheme == .light ? "light" : "dark").png"))
         }
     }
 

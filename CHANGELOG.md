@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1 - 2026-10-20
+
+- Add an About popover to the telemetry panel with the app version, build number, release date, and project links.
+
 ## 0.2.0 - 2026-10-15
 
 - Add a telemetry panel with separate RAM and GPU charts, 1-, 5-, and 15-minute history windows, current and peak utilization, and available memory.

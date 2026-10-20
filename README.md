@@ -48,6 +48,9 @@ Alternatively, download the latest [GitHub Release](https://github.com/amer8/pul
 
 Signed direct-download builds can check for app updates from the PulseBar menu.
 
+Click the info button (ⓘ) in the telemetry panel header to see the app version, build,
+release date, and project links.
+
 ## First Run
 
 1. Launch PulseBar.

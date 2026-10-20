@@ -6,6 +6,7 @@ BUILD_NUMBER ?= $(MARKETING_VERSION)
 APP_NAME := PulseBar
 APP_DISPLAY_NAME := PulseBar
 APP_VERSION ?= $(MARKETING_VERSION)
+RELEASE_DATE ?= $(shell awk -v version="$(APP_VERSION)" '$$1 == "\#\#" && $$2 == version && $$3 == "-" { print $$4; exit }' CHANGELOG.md)
 BUNDLE_IDENTIFIER ?= dev.pulsebar.PulseBar
 BUILD_CONFIGURATION := release
 RELEASE_ARCH_ARGS ?=
@@ -80,6 +81,10 @@ bundle: release
 	/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $(BUNDLE_IDENTIFIER)" "$(CONTENTS_DIR)/Info.plist"
 	/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $(APP_VERSION)" "$(CONTENTS_DIR)/Info.plist"
 	/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $(BUILD_NUMBER)" "$(CONTENTS_DIR)/Info.plist"
+	/usr/libexec/PlistBuddy -c "Delete :PulseBarReleaseDate" "$(CONTENTS_DIR)/Info.plist" >/dev/null 2>&1 || true
+	@if [ -n "$(RELEASE_DATE)" ]; then \
+		/usr/libexec/PlistBuddy -c "Add :PulseBarReleaseDate string $(RELEASE_DATE)" "$(CONTENTS_DIR)/Info.plist"; \
+	fi
 	/usr/libexec/PlistBuddy -c "Delete :SUFeedURL" "$(CONTENTS_DIR)/Info.plist" >/dev/null 2>&1 || true
 	/usr/libexec/PlistBuddy -c "Delete :SUPublicEDKey" "$(CONTENTS_DIR)/Info.plist" >/dev/null 2>&1 || true
 	/usr/libexec/PlistBuddy -c "Delete :SUEnableAutomaticChecks" "$(CONTENTS_DIR)/Info.plist" >/dev/null 2>&1 || true

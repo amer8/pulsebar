@@ -58,6 +58,7 @@ public struct TelemetryHistoryPanel: View {
     private let actions: TelemetryPanelActions
     @Binding private var historySeconds: Int
     @State private var automaticScale: Bool
+    @State private var isShowingAbout = false
 
     public init(
         state: TelemetryPanelState, now: Date, historySeconds: Binding<Int>, actions: TelemetryPanelActions,
@@ -130,6 +131,16 @@ public struct TelemetryHistoryPanel: View {
                 Button(action: actions.reconnect) { Image(systemName: "arrow.clockwise").padding(6) }
                     .buttonStyle(.plain).foregroundStyle(.secondary)
                     .help("Reconnect to dashboard").accessibilityLabel("Reconnect to dashboard")
+            }
+            Button {
+                isShowingAbout.toggle()
+            } label: {
+                Image(systemName: "info.circle").font(.system(size: 16)).padding(6)
+            }
+            .buttonStyle(.plain).foregroundStyle(.secondary)
+            .help("About PulseBar").accessibilityLabel("About PulseBar")
+            .popover(isPresented: $isShowingAbout, arrowEdge: .top) {
+                PulseBarAboutContent().onExitCommand { isShowingAbout = false }
             }
             Menu {
                 Button(action: actions.openPreferences) { Label("Preferences…", systemImage: "gearshape") }

@@ -173,6 +173,14 @@ continue to apply.
 The actions menu (⋯) in the panel header opens Preferences or the dashboard and quits
 PulseBar. Preferences and Quit also retain their ⌘, and ⌘Q shortcuts.
 
+The info button (ⓘ) beside the actions menu opens a compact About popover with the app
+icon, version and build, release date, and project links. Version information comes from
+the running app bundle. Packaging stamps `PulseBarReleaseDate` from the dated changelog
+section for `APP_VERSION`; `RELEASE_DATE` can override it. Source runs show “Development
+build” when bundle metadata is unavailable. Render the shared About content in light and
+dark mode with `swift run pulsebar-tools render-about-previews`; images are saved in
+`.build/about-previews/`.
+
 To render the shared panel in light and dark mode with live, low-use, full-scale,
 reconnecting, and signed-out sample states, run `swift run pulsebar-tools render-history-previews`.
 Images are saved in `.build/history-panel-previews/`.
