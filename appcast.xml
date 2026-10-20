@@ -3,6 +3,19 @@
     <channel>
         <title>PulseBar</title>
         <item>
+            <title>0.2.1</title>
+            <pubDate>Tue, 20 Oct 2026 11:50:15 +0200</pubDate>
+            <link>https://github.com/amer8/pulsebar</link>
+            <sparkle:version>3</sparkle:version>
+            <sparkle:shortVersionString>0.2.1</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description><![CDATA[<ul><li>Add an About popover to the telemetry panel with the app version, build number, release date, and project links.</li></ul>
+
+]]></description>
+            <enclosure url="https://github.com/amer8/pulsebar/releases/download/v0.2.1/PulseBar-0.2.1.zip" length="4329680" type="application/octet-stream" sparkle:edSignature="Ubmlm4uCx78l3zwHVCjca9rq9QdB2IVP3JsJvACHxZkdXjt3rhfmq3Isu6+4JcEerHyNJ362pyKsL6p/GcIBAw=="/>
+        </item>
+        <item>
             <title>0.2.0</title>
             <pubDate>Thu, 15 Oct 2026 15:28:30 +0200</pubDate>
             <link>https://github.com/amer8/pulsebar</link>
