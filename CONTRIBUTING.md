@@ -164,6 +164,9 @@ PULSEBAR_LAYOUT_PREVIEW_DIR="$PWD/.build/history-panel-previews" swift test --fi
 ```
 
 The panel and README preview share `TelemetryHistoryPanel` in `Sources/PulseBarUI`.
+`swift run pulsebar-tools render-readme-assets` generates `docs/assets/menu-preview.png`
+at 830 × 488 pixels for the README and `docs/assets/social-preview.png` at 640 × 320 pixels
+for social previews. Both show the telemetry panel with the About popover closed.
 The Trends layout puts current readings and peaks beside separate RAM/GPU charts.
 Auto scales start at zero, with a minimum 5% range; the scale button switches both charts
 to 0–100% for comparison. Relative time labels avoid clipped clock labels. The Menu Bar

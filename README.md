@@ -1,8 +1,6 @@
 
 <p align="center">
-  <img src="docs/assets/menu-preview.png" alt="Separate RAM and GPU history charts with adaptive scales." width="830">
-  <br>
-  <em>Separate RAM and GPU history charts with adaptive scales. Rendered preview with sample data.</em>
+  <img src="docs/assets/menu-preview.png" alt="PulseBar RAM and GPU history charts with the new info button and the About popover closed." width="830" height="488">
 </p>
 
 [![CI](https://github.com/amer8/pulsebar/actions/workflows/quality.yml/badge.svg?branch=main)](https://github.com/amer8/pulsebar/actions/workflows/quality.yml)

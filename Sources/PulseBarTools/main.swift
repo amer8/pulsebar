@@ -109,9 +109,12 @@ private struct Tool {
         let assetDirectory = root.appendingPathComponent("docs/assets")
         try FileManager.default.createDirectory(at: assetDirectory, withIntermediateDirectories: true)
 
-        let menuPreview = assetDirectory.appendingPathComponent("menu-preview.png")
-        try ReadmeAssetRenderer.writeMenuPreview(to: menuPreview)
-        print("Updated \(menuPreview.path)")
+        let previews: [(String, ReadmePreviewLayout)] = [("menu-preview.png", .menu), ("social-preview.png", .social)]
+        for (name, layout) in previews {
+            let preview = assetDirectory.appendingPathComponent(name)
+            try ReadmeAssetRenderer.writeMenuPreview(to: preview, layout: layout)
+            print("Updated \(preview.path)")
+        }
     }
 
     private func renderHistoryPreviews(_ arguments: [String]) throws {
@@ -722,7 +725,7 @@ extension String {
 
 @MainActor
 private enum ReadmeAssetRenderer {
-    static func writeMenuPreview(to url: URL) throws {
+    static func writeMenuPreview(to url: URL, layout: ReadmePreviewLayout) throws {
         let appIcon = NSImage(contentsOf: url.deletingLastPathComponent().appendingPathComponent("app-icon.png"))
         let reference = Date(timeIntervalSince1970: 1_700_041_260)
         let state = historySample(at: reference)
@@ -730,10 +733,10 @@ private enum ReadmeAssetRenderer {
             TelemetryHistoryPanel(state: state, now: reference, historySeconds: .constant(300), actions: TelemetryPanelActions()),
             size: TelemetryHistoryPanel.preferredSize(for: state), scheme: .light)
         let renderer = ImageRenderer(
-            content: ReadmeMenuPreview(appIcon: appIcon, panel: panel)
+            content: ReadmeMenuPreview(appIcon: appIcon, panel: panel, layout: layout)
                 .environment(\.colorScheme, .light).environment(\.locale, Locale(identifier: "en_US"))
                 .environment(\.timeZone, TimeZone(secondsFromGMT: 0)!))
-        renderer.scale = 2
+        renderer.scale = 1
         renderer.colorMode = .nonLinear
         guard let image = renderer.nsImage else { throw ToolError("failed to render README preview") }
         try image.writePNG(to: url)
@@ -960,39 +963,30 @@ private struct PreferencesSampleView: View {
     }
 }
 
+private enum ReadmePreviewLayout {
+    case menu
+    case social
+}
+
 // Rendered UI preview with fixed sample data; it does not contact services or change preferences.
 private struct ReadmeMenuPreview: View {
-    private let cardWidth: CGFloat = 830
-    private let cardHeight: CGFloat = 610
-    private let safeInset: CGFloat = 40
-    private let menuBarTopInset: CGFloat = 32
+    private var isSocial: Bool { layout == .social }
+    private var cardWidth: CGFloat { isSocial ? 640 : 830 }
+    private var cardHeight: CGFloat { isSocial ? 320 : 488 }
+    private var safeInset: CGFloat { isSocial ? 24 : 40 }
 
     let appIcon: NSImage?
     let panel: NSImage
+    let layout: ReadmePreviewLayout
 
     var body: some View {
-        ZStack(alignment: .top) {
+        ZStack(alignment: .topLeading) {
             backgroundView
-
-            VStack(spacing: 0) {
-                menuBar
-
-                HStack(alignment: .top, spacing: 26) {
-                    titleBlock
-                        .padding(.top, 34)
-
-                    menuCard
-                        .frame(width: 440, alignment: .leading)
-                        .padding(.top, 3)
-                }
-                .padding(.horizontal, safeInset)
-            }
-            .padding(.top, menuBarTopInset)
+            menuBar
+            titleBlock.offset(x: isSocial ? 24 : 49, y: isSocial ? 135 : 70)
+            menuCard.offset(x: isSocial ? 360 : 341, y: isSocial ? 38 : 35)
         }
-        .frame(width: cardWidth, height: cardHeight)
-        // Crop the composition while preserving the desktop artwork and branding.
-        .offset(y: -menuBarTopInset)
-        .frame(width: cardWidth, height: panel.size.height + 64, alignment: .top)
+        .frame(width: cardWidth, height: cardHeight, alignment: .topLeading)
         .clipped()
     }
 
@@ -1002,7 +996,7 @@ private struct ReadmeMenuPreview: View {
                 Image(nsImage: appIcon)
                     .resizable()
                     .interpolation(.high)
-                    .frame(width: 58, height: 58)
+                    .frame(width: isSocial ? 48 : 58, height: isSocial ? 48 : 58)
                     .shadow(color: .black.opacity(0.18), radius: 14, x: 0, y: 8)
             }
 
@@ -1015,7 +1009,7 @@ private struct ReadmeMenuPreview: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .frame(width: 266, alignment: .leading)
+        .frame(width: isSocial ? 292 : 266, alignment: .leading)
     }
 
     private var backgroundView: some View {
@@ -1107,11 +1101,13 @@ private struct ReadmeMenuPreview: View {
     }
 
     private var menuCard: some View {
-        Image(nsImage: panel)
-            .resizable().frame(width: panel.size.width, height: panel.size.height)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-            .overlay { RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.4), lineWidth: 0.5) }
-            .shadow(color: .black.opacity(0.22), radius: 18, x: 0, y: 12)
+        let scale: CGFloat = isSocial ? 0.63 : 1
+        let cornerRadius: CGFloat = isSocial ? 8 : 12
+        return Image(nsImage: panel)
+            .resizable().interpolation(.high).frame(width: panel.size.width * scale, height: panel.size.height * scale)
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+            .overlay { RoundedRectangle(cornerRadius: cornerRadius).stroke(.white.opacity(0.4), lineWidth: 0.5) }
+            .shadow(color: .black.opacity(0.22), radius: isSocial ? 14 : 18, x: 0, y: isSocial ? 8 : 12)
     }
 }
 
