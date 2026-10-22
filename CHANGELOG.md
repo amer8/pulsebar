@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Upgrade Sparkle to 2.10.0.
+- Keep the RAM percentage consistent between the menu bar and history when reported memory capacity is fractional.
+- Cancel pending sign-ins on sign-out and ignore late responses so they cannot restore or replace a newer session.
+- Add authentication and session-storage regression tests, including rejected credentials and token-save failures.
+
 ## 0.2.1 - 2026-10-20
 
 - Add an About popover to the telemetry panel with the app version, build number, release date, and project links.

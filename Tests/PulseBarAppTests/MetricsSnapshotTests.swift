@@ -105,6 +105,22 @@ final class MetricsSnapshotTests: XCTestCase {
         XCTAssertEqual(snapshot.memory.percentText, "0%")
     }
 
+    func testFractionalMemoryTotalKeepsMenuAndHistoryPercentagesConsistent() {
+        let sample = TelemetrySample(
+            gpuUtilizationPercent: 37,
+            memoryTotalMB: 130_764.8,
+            memoryAvailableMB: 130_764.8 * 0.094
+        )
+        let snapshot = MetricsSnapshot.live(sample)
+        var history = TelemetryHistory()
+        history.append(sample, at: Date(timeIntervalSince1970: 0))
+
+        XCTAssertEqual(snapshot.menuBarTitle, "RAM 91% GPU 37%")
+        XCTAssertEqual(snapshot.memory.totalGiB, 128)
+        XCTAssertEqual(snapshot.memory.percentUsed ?? -1, 90.6, accuracy: 1e-9)
+        XCTAssertEqual(history.samples[0].memoryPercent, snapshot.memory.percentUsed ?? -1, accuracy: 1e-9)
+    }
+
     func testUsedMemoryFormattingUsesTwoFractionDigitsAndLocaleDecimalSeparator() {
         XCTAssertEqual(
             MetricNumberFormat.usedMemoryGiBString(2.55, locale: Locale(identifier: "en_US")),

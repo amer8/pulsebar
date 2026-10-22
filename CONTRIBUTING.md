@@ -70,6 +70,27 @@ make readme-assets
 
 The GitHub Actions workflow at `.github/workflows/quality.yml` runs on pull requests, pushes to `main`, and manual dispatches.
 
+Authentication tests use an injected dashboard client and in-memory session storage.
+Session-storage tests use a fake Keychain adapter; they do not read or change saved
+credentials. HTTP integration tests cover login through the local simulator, rejected
+credentials, server errors, and malformed login responses. Authentication lifecycle tests
+also cover duplicate submissions, cancellation, sign-out during login, and late responses
+after a newer session has started.
+
+Sparkle is a public dependency and does not require GitHub credentials. To resolve it
+without Swift Package Manager consulting Keychain or netrc, run:
+
+```bash
+swift package --disable-keychain --disable-netrc resolve
+```
+
+Before releasing changes to authentication or the updater, manually verify these behaviors:
+
+- Sign in to a real Spark dashboard, restart PulseBar, and confirm the saved session resumes.
+- Check reconnect behavior after sleep, network loss, and tunnel restart during an extended run.
+- Measure idle CPU and energy use, and check keyboard navigation and VoiceOver in Preferences and the telemetry panel.
+- Run the signed app on the oldest supported macOS version and on Intel, then exercise an actual signed Sparkle update.
+
 ## Telemetry Contract
 
 The current implementation expects `gpu_telemetry` SSE events shaped like this:

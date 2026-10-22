@@ -5,6 +5,66 @@ import XCTest
 
 final class ConnectionIntegrationTests: XCTestCase {
     @MainActor
+    func testLoginReachesLiveTelemetryAndPersistsSession() async throws {
+        let server = try DashboardFixture(scenario: "live")
+        let session = URLSession(configuration: .ephemeral)
+        let store = MemorySessionStore(username: "", token: nil)
+        let model = MetricsViewModel(dashboard: DashboardClient(baseURL: server.url, session: session), sessionStore: store)
+        defer {
+            model.signOut()
+            session.invalidateAndCancel()
+            server.stop()
+        }
+
+        let connectionMessage = await model.testConnection()
+        XCTAssertTrue(connectionMessage.hasPrefix("Dashboard page is reachable"))
+        model.username = " demo \n"
+        model.password = "demo"
+        let task = try XCTUnwrap(model.signIn())
+        await task.value
+        try await waitUntil { model.connectionHealth.state == .live }
+
+        XCTAssertTrue(model.isSignedIn)
+        XCTAssertFalse(model.isAuthenticating)
+        XCTAssertEqual(model.username, "demo")
+        XCTAssertEqual(model.password, "")
+        XCTAssertEqual(store.loadUsername(), "demo")
+        XCTAssertEqual(store.token, "simulator-token")
+    }
+
+    @MainActor
+    func testHTTPLoginFailuresDoNotPersistSession() async throws {
+        for (scenario, password, expectedMessage) in [
+            ("live", "incorrect-password", DashboardError.loginFailed.localizedDescription),
+            ("login-error", "demo", "Authentication service unavailable."),
+            ("login-invalid-response", "demo", nil),
+        ] as [(String, String, String?)] {
+            let server = try DashboardFixture(scenario: scenario)
+            let session = URLSession(configuration: .ephemeral)
+            let store = MemorySessionStore(username: "", token: nil)
+            let model = MetricsViewModel(dashboard: DashboardClient(baseURL: server.url, session: session), sessionStore: store)
+            defer {
+                model.signOut()
+                session.invalidateAndCancel()
+                server.stop()
+            }
+
+            model.username = "demo"
+            model.password = password
+            let task = try XCTUnwrap(model.signIn())
+            await task.value
+
+            XCTAssertFalse(model.isSignedIn, scenario)
+            XCTAssertFalse(model.isAuthenticating, scenario)
+            XCTAssertEqual(model.password, "", scenario)
+            XCTAssertNil(store.token, scenario)
+            XCTAssertEqual(store.loadUsername(), "", scenario)
+            XCTAssertNotNil(model.snapshot.gpu.note, scenario)
+            if let expectedMessage { XCTAssertEqual(model.snapshot.gpu.note, expectedMessage, scenario) }
+        }
+    }
+
+    @MainActor
     func testMenuUsesLiveReadingsAfterConnectingAndRefreshing() async throws {
         let server = try DashboardFixture(scenario: "live")
         let session = URLSession(configuration: .ephemeral)
@@ -114,8 +174,12 @@ final class ConnectionIntegrationTests: XCTestCase {
 
 @MainActor
 private final class MemorySessionStore: DashboardSessionStoring {
-    private var username = "demo"
-    private(set) var token: String? = "simulator-token"
+    private var username: String
+    private(set) var token: String?
+    init(username: String = "demo", token: String? = "simulator-token") {
+        self.username = username
+        self.token = token
+    }
     func loadUsername() -> String { username }
     func saveUsername(_ username: String) { self.username = username }
     func clearUsername() { username = "" }

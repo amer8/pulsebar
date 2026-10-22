@@ -28,6 +28,10 @@ class Dashboard(BaseHTTPRequestHandler):
             return self.respond(400, {"error": "Invalid JSON"})
         if payload != {"username": "demo", "password": "demo"}:
             return self.respond(401, {"error": "Invalid credentials"})
+        if self.server.scenario == "login-error":
+            return self.respond(503, {"error": "Authentication service unavailable."})
+        if self.server.scenario == "login-invalid-response":
+            return self.respond(200, {"unexpected": "missing token"})
         self.respond(200, {"token": "simulator-token"})
 
     def do_GET(self):
@@ -70,7 +74,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=11001)
     parser.add_argument("--memory-units", choices=["kib", "mb"], default="kib", help="Current KiB fields or legacy MB fields")
-    parser.add_argument("--scenario", choices=["live", "heartbeat-only", "disconnect", "unauthorized", "malformed"], default="live")
+    parser.add_argument("--scenario", choices=["live", "heartbeat-only", "disconnect", "unauthorized", "malformed",
+                                              "login-error", "login-invalid-response"], default="live")
     args = parser.parse_args()
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Dashboard)
     server.scenario = args.scenario
