@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.2 - 2026-10-23
 
 - Upgrade Sparkle to 2.10.0.
 - Keep the RAM percentage consistent between the menu bar and history when reported memory capacity is fractional.
