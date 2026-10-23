@@ -666,7 +666,7 @@ private enum Command {
             process.arguments = [executable] + arguments
         }
         process.currentDirectoryURL = cwd
-        process.environment = environment
+        process.environment = environment ?? ProcessInfo.processInfo.environment
 
         let stdout = Pipe()
         let stderr = Pipe()
