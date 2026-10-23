@@ -72,7 +72,7 @@ The GitHub Actions workflow at `.github/workflows/quality.yml` runs on pull requ
 
 Authentication tests use an injected dashboard client and in-memory session storage.
 Session-storage tests use a fake Keychain adapter; they do not read or change saved
-credentials. HTTP integration tests cover login through the local simulator, rejected
+credentials. HTTP integration tests cover login through the Swift HTTP fixture, rejected
 credentials, server errors, and malformed login responses. Authentication lifecycle tests
 also cover duplicate submissions, cancellation, sign-out during login, and late responses
 after a newer session has started.
@@ -120,24 +120,24 @@ Connection health includes connection state, the last-sample timestamp, and a Re
 action to the existing menu. It detects stale telemetry after 30 seconds, uses bounded
 reconnect delays, and reconnects after wake.
 
-The connection integration tests require `python3` and start disposable simulator servers
-on OS-assigned loopback ports. They exercise live readings, reconnect, stale streams,
+The connection integration tests start disposable Swift HTTP/SSE fixtures from the test
+target on OS-assigned loopback ports. They exercise live readings, reconnect, stale streams,
 session expiry, and sign-out using in-memory credentials rather than your saved session.
 Telemetry accepts the current dashboard's KiB memory fields and the older MB fields.
-The simulator emits KiB by default; use `--memory-units mb` to exercise legacy compatibility.
+The HTTP fixture emits KiB; telemetry compatibility tests also cover legacy MB payloads.
 
-Run `make check` and `swift run PulseBar`. For a local fixture, run
-`python3 Scripts/dashboard-simulator.py --port 11000` in another terminal and sign in with
-`demo` / `demo`. Use `--scenario heartbeat-only`, `disconnect`, `unauthorized`, or `malformed`
-to exercise failures. Connection health is part of the merged main branch.
+Run `make check` for automated connection checks. Run `swift run PulseBar --demo` to
+explore the telemetry UI without saved credentials, or `swift run PulseBar` to test a real
+dashboard through NVIDIA Sync or an SSH tunnel. The Swift fixtures are only built for tests;
+Python is not required.
 
 ## Guided Setup Feature
 
 Guided setup includes a local-port setting, a dashboard connection check, NVIDIA
 Sync and SSH setup actions, and inline login errors. Saved sessions are isolated by port.
-Run `make check` and `swift run PulseBar`. For a local fixture, run
-`python3 Scripts/dashboard-simulator.py --port 11001` in another terminal, set port 11001
-in Preferences, and sign in with `demo` / `demo`. The existing telemetry menu is retained.
+Run `make check` and `swift run PulseBar`. To manually test an alternate port, forward
+the real dashboard to port 11001 through an SSH tunnel, set port 11001 in Preferences,
+and sign in with dashboard credentials. The existing telemetry menu is retained.
 
 Preferences uses compact connection and account cards. The app and standalone Preferences
 renderer share the same SwiftUI layout in `Sources/PulseBarUI`. To inspect signed-in,

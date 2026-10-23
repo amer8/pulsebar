@@ -6,7 +6,7 @@ import XCTest
 final class ConnectionIntegrationTests: XCTestCase {
     @MainActor
     func testLoginReachesLiveTelemetryAndPersistsSession() async throws {
-        let server = try DashboardFixture(scenario: "live")
+        let server = try await DashboardFixture(scenario: .live)
         let session = URLSession(configuration: .ephemeral)
         let store = MemorySessionStore(username: "", token: nil)
         let model = MetricsViewModel(dashboard: DashboardClient(baseURL: server.url, session: session), sessionStore: store)
@@ -35,11 +35,11 @@ final class ConnectionIntegrationTests: XCTestCase {
     @MainActor
     func testHTTPLoginFailuresDoNotPersistSession() async throws {
         for (scenario, password, expectedMessage) in [
-            ("live", "incorrect-password", DashboardError.loginFailed.localizedDescription),
-            ("login-error", "demo", "Authentication service unavailable."),
-            ("login-invalid-response", "demo", nil),
-        ] as [(String, String, String?)] {
-            let server = try DashboardFixture(scenario: scenario)
+            (.live, "incorrect-password", DashboardError.loginFailed.localizedDescription),
+            (.loginError, "demo", "Authentication service unavailable."),
+            (.loginInvalidResponse, "demo", nil),
+        ] as [(DashboardFixture.Scenario, String, String?)] {
+            let server = try await DashboardFixture(scenario: scenario)
             let session = URLSession(configuration: .ephemeral)
             let store = MemorySessionStore(username: "", token: nil)
             let model = MetricsViewModel(dashboard: DashboardClient(baseURL: server.url, session: session), sessionStore: store)
@@ -54,19 +54,19 @@ final class ConnectionIntegrationTests: XCTestCase {
             let task = try XCTUnwrap(model.signIn())
             await task.value
 
-            XCTAssertFalse(model.isSignedIn, scenario)
-            XCTAssertFalse(model.isAuthenticating, scenario)
-            XCTAssertEqual(model.password, "", scenario)
-            XCTAssertNil(store.token, scenario)
-            XCTAssertEqual(store.loadUsername(), "", scenario)
-            XCTAssertNotNil(model.snapshot.gpu.note, scenario)
-            if let expectedMessage { XCTAssertEqual(model.snapshot.gpu.note, expectedMessage, scenario) }
+            XCTAssertFalse(model.isSignedIn, scenario.rawValue)
+            XCTAssertFalse(model.isAuthenticating, scenario.rawValue)
+            XCTAssertEqual(model.password, "", scenario.rawValue)
+            XCTAssertNil(store.token, scenario.rawValue)
+            XCTAssertEqual(store.loadUsername(), "", scenario.rawValue)
+            XCTAssertNotNil(model.snapshot.gpu.note, scenario.rawValue)
+            if let expectedMessage { XCTAssertEqual(model.snapshot.gpu.note, expectedMessage, scenario.rawValue) }
         }
     }
 
     @MainActor
     func testMenuUsesLiveReadingsAfterConnectingAndRefreshing() async throws {
-        let server = try DashboardFixture(scenario: "live")
+        let server = try await DashboardFixture(scenario: .live)
         let session = URLSession(configuration: .ephemeral)
         let model = MetricsViewModel(
             dashboard: DashboardClient(baseURL: server.url, session: session), sessionStore: MemorySessionStore())
@@ -96,7 +96,7 @@ final class ConnectionIntegrationTests: XCTestCase {
 
     @MainActor
     func testHeartbeatOnlyStreamClearsReadingsAndRestartsWhenStale() async throws {
-        let server = try DashboardFixture(scenario: "heartbeat-only")
+        let server = try await DashboardFixture(scenario: .heartbeatOnly)
         let session = URLSession(configuration: .ephemeral)
         let model = MetricsViewModel(
             dashboard: DashboardClient(baseURL: server.url, session: session), sessionStore: MemorySessionStore())
@@ -119,7 +119,7 @@ final class ConnectionIntegrationTests: XCTestCase {
 
     @MainActor
     func testUnauthorizedSessionUpdatesTheWholeMenu() async throws {
-        let server = try DashboardFixture(scenario: "unauthorized")
+        let server = try await DashboardFixture(scenario: .unauthorized)
         let session = URLSession(configuration: .ephemeral)
         let store = MemorySessionStore()
         let model = MetricsViewModel(dashboard: DashboardClient(baseURL: server.url, session: session), sessionStore: store)
@@ -140,7 +140,7 @@ final class ConnectionIntegrationTests: XCTestCase {
 
     @MainActor
     func testCancelledStreamCannotRestoreReadingsAfterSignOut() async throws {
-        let server = try DashboardFixture(scenario: "live")
+        let server = try await DashboardFixture(scenario: .live)
         let session = URLSession(configuration: .ephemeral)
         let model = MetricsViewModel(
             dashboard: DashboardClient(baseURL: server.url, session: session), sessionStore: MemorySessionStore())
@@ -189,42 +189,5 @@ private final class MemorySessionStore: DashboardSessionStoring {
 }
 
 private enum FixtureError: Error {
-    case startup
     case timeout
-}
-
-private final class DashboardFixture {
-    let url: URL
-    private let process: Process
-
-    init(scenario: String) throws {
-        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        let process = Process()
-        let output = Pipe()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = [
-            "python3", root.appendingPathComponent("Scripts/dashboard-simulator.py").path, "--port", "0", "--scenario", scenario,
-        ]
-        process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
-        try process.run()
-
-        // The fixture prints its OS-assigned port immediately after binding.
-        let data = output.fileHandleForReading.availableData
-        let line = String(decoding: data, as: UTF8.self)
-        guard let address = line.split(separator: " ").dropFirst().first, let url = URL(string: String(address)), url.port != nil else {
-            if process.isRunning { process.terminate() }
-            process.waitUntilExit()
-            throw FixtureError.startup
-        }
-        self.url = url
-        self.process = process
-    }
-
-    func stop() {
-        if process.isRunning { process.terminate() }
-        process.waitUntilExit()
-    }
-
-    deinit { stop() }
 }

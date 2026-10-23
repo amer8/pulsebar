@@ -6,6 +6,7 @@
 - Keep the RAM percentage consistent between the menu bar and history when reported memory capacity is fractional.
 - Cancel pending sign-ins on sign-out and ignore late responses so they cannot restore or replace a newer session.
 - Add authentication and session-storage regression tests, including rejected credentials and token-save failures.
+- Replace the Python dashboard simulator with a Swift test fixture, removing Python from the test requirements.
 
 ## 0.2.1 - 2026-10-20
 
