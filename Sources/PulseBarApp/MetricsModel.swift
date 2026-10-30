@@ -23,6 +23,8 @@ final class MetricsViewModel: ObservableObject {
     @Published var username: String
     @Published var password = ""
     @Published private(set) var isAuthenticating = false
+    @Published private(set) var sessionRemovalError: String?
+    @Published private(set) var sessionLoadError: String?
 
     private var dashboard: any DashboardServing
     private let syncAppMonitor: NVIDIASyncAppMonitor
@@ -57,21 +59,26 @@ final class MetricsViewModel: ObservableObject {
         let dashboard = dashboard ?? DashboardClient(baseURL: endpoint.url)
         let sessionStore = sessionStore ?? DashboardSessionStore(endpoint: endpoint)
         let username = demo ? "Demo" : sessionStore.loadUsername()
-        let authToken = demo ? nil : sessionStore.loadToken()
+        var authToken: String?
+        var loadError: String?
+        if !demo {
+            do { authToken = try sessionStore.loadToken() } catch { loadError = error.userFacingMessage }
+        }
 
         self.dashboard = dashboard
         self.syncAppMonitor = syncAppMonitor
         self.sessionStore = sessionStore
         self.authToken = authToken
+        self.sessionLoadError = loadError
         self.endpoint = endpoint
 
         if authToken != nil {
             self.username = username
             self.snapshot = .connecting(username: username)
         } else {
-            self.username = ""
+            self.username = loadError == nil ? "" : username
             self.snapshot = .signedOut()
-            if !demo { sessionStore.clearUsername() }
+            if !demo && loadError == nil { sessionStore.clearUsername() }
         }
 
         if demo {
@@ -190,6 +197,8 @@ final class MetricsViewModel: ObservableObject {
                 guard self.activeAuthenticationID == authenticationID else { return }
                 try self.sessionStore.saveToken(token)
                 self.sessionStore.saveUsername(trimmedUsername)
+                self.sessionRemovalError = nil
+                self.sessionLoadError = nil
                 self.password = ""
                 self.username = trimmedUsername
                 self.authToken = token
@@ -206,8 +215,6 @@ final class MetricsViewModel: ObservableObject {
                 self.activeTelemetryStreamID = nil
                 self.activeUpdateAvailabilityTaskID = nil
                 self.isUpdateAvailable = false
-                self.sessionStore.clearUsername()
-                self.sessionStore.clearToken()
                 self.connectionHealth = TelemetryConnectionHealth()
                 self.snapshot = .signedOut(note: message)
                 self.log("Sign-in failed: \(message)")
@@ -221,6 +228,9 @@ final class MetricsViewModel: ObservableObject {
         authenticationTask = nil
         activeAuthenticationID = nil
         isAuthenticating = false
+        password = ""
+        guard removeSavedSession() else { return }
+        sessionLoadError = nil
         streamTask?.cancel()
         updateAvailabilityTask?.cancel()
         streamTask = nil
@@ -231,8 +241,6 @@ final class MetricsViewModel: ObservableObject {
         username = ""
         password = ""
         isUpdateAvailable = false
-        sessionStore.clearUsername()
-        sessionStore.clearToken()
         connectionHealth = TelemetryConnectionHealth()
         history = TelemetryHistory()
         snapshot = .signedOut(note: "Signed out. Sign in again to resume metrics.")
@@ -240,7 +248,7 @@ final class MetricsViewModel: ObservableObject {
     }
 
     func configureEndpoint(_ target: DashboardEndpoint) {
-        guard target != endpoint, !isAuthenticating else { return }
+        guard target != endpoint, !isAuthenticating, sessionRemovalError == nil else { return }
         streamTask?.cancel()
         updateAvailabilityTask?.cancel()
         activeTelemetryStreamID = nil
@@ -249,8 +257,10 @@ final class MetricsViewModel: ObservableObject {
         target.save()
         dashboard = DashboardClient(baseURL: target.url)
         sessionStore = DashboardSessionStore(endpoint: target)
-        authToken = sessionStore.loadToken()
+        authToken = nil
         username = sessionStore.loadUsername()
+        sessionLoadError = nil
+        do { authToken = try sessionStore.loadToken() } catch { sessionLoadError = error.userFacingMessage }
         password = ""
         isUpdateAvailable = false
         retryFailures = 0
@@ -272,6 +282,28 @@ final class MetricsViewModel: ObservableObject {
             }
             return "Dashboard page is reachable at \(target.address). Sign in to verify telemetry."
         } catch { return DashboardConnectionMessage.message(for: error, syncAppState: syncAppMonitor.currentState(), endpoint: target) }
+    }
+
+    func retrySavedSession() {
+        guard !isAuthenticating, authToken == nil, sessionRemovalError == nil else { return }
+        do {
+            guard let token = try sessionStore.loadToken() else {
+                sessionLoadError = nil
+                username = ""
+                sessionStore.clearUsername()
+                snapshot = .signedOut()
+                return
+            }
+            sessionLoadError = nil
+            username = sessionStore.loadUsername()
+            authToken = token
+            connectionHealth.beginConnection()
+            snapshot = .connecting(username: username)
+            startStream(using: token)
+            startUpdateAvailabilityChecks(using: token)
+        } catch {
+            sessionLoadError = error.userFacingMessage
+        }
     }
 
     func quit() {
@@ -364,7 +396,7 @@ final class MetricsViewModel: ObservableObject {
                             return
                         }
 
-                        self.expireDashboardSession(logMessage: "Telemetry stream returned 401. Cleared saved session.")
+                        self.expireDashboardSession(logMessage: "Telemetry stream returned 401.")
                     }
                     return
                 } catch {
@@ -428,7 +460,7 @@ final class MetricsViewModel: ObservableObject {
                             return
                         }
 
-                        self.expireDashboardSession(logMessage: "Update availability check returned 401. Cleared saved session.")
+                        self.expireDashboardSession(logMessage: "Update availability check returned 401.")
                     }
                     return
                 } catch {
@@ -477,11 +509,24 @@ final class MetricsViewModel: ObservableObject {
         isUpdateAvailable = false
         activeTelemetryStreamID = nil
         activeUpdateAvailabilityTaskID = nil
-        sessionStore.clearUsername()
-        sessionStore.clearToken()
+        removeSavedSession()
         connectionHealth.expire()
         snapshot = .signedOut(note: "Your dashboard session expired. Sign in again.")
         log(logMessage)
+    }
+
+    @discardableResult
+    private func removeSavedSession() -> Bool {
+        do {
+            try sessionStore.clearToken()
+            sessionStore.clearUsername()
+            sessionRemovalError = nil
+            return true
+        } catch {
+            sessionRemovalError = error.userFacingMessage
+            log("Failed to remove saved dashboard session: \(error.userFacingMessage)")
+            return false
+        }
     }
 
     private func log(_ message: String) {
@@ -998,11 +1043,13 @@ struct PulseBarPreferencesView: View {
         }
         state.isAuthenticating = viewModel.isAuthenticating
         state.isChecking = checking
-        state.canApplyPort = (try? DashboardEndpoint.parse(portText)) != viewModel.endpoint
+        state.canApplyPort = (try? DashboardEndpoint.parse(portText)) != viewModel.endpoint && viewModel.sessionRemovalError == nil
         state.canTestConnection = !state.canApplyPort
         state.canSignIn = viewModel.canSignIn
         state.feedback = feedback
-        state.accountNote = viewModel.snapshot.gpu.note
+        state.accountNote = viewModel.sessionRemovalError ?? viewModel.sessionLoadError ?? viewModel.snapshot.gpu.note
+        state.canRetrySessionRemoval = !viewModel.isSignedIn && viewModel.sessionRemovalError != nil
+        state.canRetrySessionLoad = !viewModel.isSignedIn && viewModel.sessionLoadError != nil && viewModel.sessionRemovalError == nil
         return state
     }
 
@@ -1035,6 +1082,7 @@ struct PulseBarPreferencesView: View {
         }
         actions.signIn = { _ = viewModel.signIn() }
         actions.signOut = { viewModel.signOut() }
+        actions.retrySessionLoad = { viewModel.retrySavedSession() }
         return actions
     }
 }

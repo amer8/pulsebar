@@ -53,6 +53,10 @@ Local unsigned builds keep the updater disabled. Signed direct-download builds c
 
 Preserve the existing Sparkle signing key so installed copies can verify updates.
 
+The optional `swift run pulsebar-tools release` command requires a clean `main` checkout
+that contains the current `origin/main`. It pushes the release commit before publishing
+the tag and release, then pushes the generated appcast commit to `main`.
+
 ## Checks
 
 ```bash

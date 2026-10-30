@@ -162,6 +162,70 @@ final class AuthenticationTests: XCTestCase {
         XCTAssertEqual(model.snapshot.gpu.note, "Sign-in cancelled.")
     }
 
+    func testSignOutFailureKeepsSessionAndAllowsRetry() async throws {
+        let dashboard = ControlledDashboard()
+        let store = AuthenticationSessionStore()
+        let model = MetricsViewModel(dashboard: dashboard, sessionStore: store)
+        model.username = "demo"
+        model.password = "fake-password"
+        let task = try XCTUnwrap(model.signIn())
+        try await waitForLogin(dashboard, count: 1)
+        await dashboard.completeLogin(at: 0, with: .success("fake-token"))
+        await task.value
+
+        store.deleteError = SessionStoreError.keychainDeleteFailed(errSecAuthFailed)
+        model.signOut()
+        XCTAssertTrue(model.isSignedIn)
+        XCTAssertEqual(store.token, "fake-token")
+        XCTAssertEqual(store.username, "demo")
+        XCTAssertTrue(model.sessionRemovalError?.contains("could not remove") == true)
+
+        store.deleteError = nil
+        model.signOut()
+        XCTAssertFalse(model.isSignedIn)
+        XCTAssertNil(store.token)
+        XCTAssertEqual(store.username, "")
+        XCTAssertNil(model.sessionRemovalError)
+    }
+
+    func testTemporaryKeychainReadFailurePreservesUsernameAndCanBeRetried() throws {
+        let store = AuthenticationSessionStore()
+        store.saveUsername("demo")
+        try store.saveToken("saved-token")
+        store.readError = SessionStoreError.keychainReadFailed(errSecInteractionNotAllowed)
+        let model = MetricsViewModel(dashboard: ControlledDashboard(), sessionStore: store)
+        defer { model.signOut() }
+
+        XCTAssertFalse(model.isSignedIn)
+        XCTAssertEqual(model.username, "demo")
+        XCTAssertEqual(store.username, "demo")
+        XCTAssertTrue(model.sessionLoadError?.contains("could not read") == true)
+
+        store.readError = nil
+        model.retrySavedSession()
+        XCTAssertTrue(model.isSignedIn)
+        XCTAssertEqual(model.username, "demo")
+        XCTAssertNil(model.sessionLoadError)
+    }
+
+    func testFailedLoginDoesNotDeleteAnUnreadableSavedSession() async throws {
+        let store = AuthenticationSessionStore()
+        store.saveUsername("saved-user")
+        try store.saveToken("saved-token")
+        store.readError = SessionStoreError.keychainReadFailed(errSecInteractionNotAllowed)
+        let dashboard = ControlledDashboard()
+        let model = MetricsViewModel(dashboard: dashboard, sessionStore: store)
+        defer { model.signOut() }
+        model.username = "demo"
+        model.password = "wrong-password"
+        let task = try XCTUnwrap(model.signIn())
+        try await waitForLogin(dashboard, count: 1)
+        await dashboard.completeLogin(at: 0, with: .failure(DashboardError.loginFailed))
+        await task.value
+        XCTAssertEqual(store.token, "saved-token")
+        XCTAssertEqual(store.username, "saved-user")
+    }
+
     private func waitForLogin(_ dashboard: ControlledDashboard, count: Int) async throws {
         let deadline = ContinuousClock.now.advanced(by: .seconds(2))
         while await dashboard.requests.count < count {
@@ -216,13 +280,21 @@ private final class AuthenticationSessionStore: DashboardSessionStoring {
     private(set) var username = ""
     private(set) var token: String?
     var saveError: (any Error)?
+    var deleteError: (any Error)?
+    var readError: (any Error)?
     func loadUsername() -> String { username }
     func saveUsername(_ username: String) { self.username = username }
     func clearUsername() { username = "" }
-    func loadToken() -> String? { token }
+    func loadToken() throws -> String? {
+        if let readError { throw readError }
+        return token
+    }
     func saveToken(_ token: String) throws {
         if let saveError { throw saveError }
         self.token = token
     }
-    func clearToken() { token = nil }
+    func clearToken() throws {
+        if let deleteError { throw deleteError }
+        token = nil
+    }
 }

@@ -302,6 +302,7 @@ private struct Tool {
         try requireCommand("codesign")
         try requireCommand("spctl")
         try requireCleanWorktree()
+        try ReleaseGitPreflight.validate(root: root)
         try validateSparklePrivateKey(sparklePrivateKeyFile)
         try ensureChangelogFinalized(version: marketingVersion)
         try ensureAppcastBuildIsMonotonic(buildNumber: buildNumber)
@@ -336,6 +337,7 @@ private struct Tool {
             throw ToolError("tag already exists: \(tag)")
         }
 
+        try Command.run("git", ["push", "origin", "HEAD:refs/heads/main"], cwd: root)
         try Command.run("git", ["tag", "-m", "\(appName) \(marketingVersion)", tag], cwd: root)
         try Command.run("git", ["push", "origin", tag], cwd: root)
         try Command.run(
@@ -356,7 +358,7 @@ private struct Tool {
 
         try Command.run("git", ["add", root.appendingPathComponent("appcast.xml").path], cwd: root)
         try Command.run("git", ["commit", "-m", "docs: update appcast for \(marketingVersion)"], cwd: root)
-        try Command.run("git", ["push", "origin", "main"], cwd: root)
+        try Command.run("git", ["push", "origin", "HEAD:refs/heads/main"], cwd: root)
         try checkReleaseAssets([tag])
 
         print("Release \(marketingVersion) complete.")
@@ -633,7 +635,7 @@ private enum ProjectRoot {
     }
 }
 
-private enum Command {
+enum Command {
     static func run(_ executable: String, _ arguments: [String], cwd: URL? = nil, environment: [String: String]? = nil) throws {
         try execute(executable, arguments, cwd: cwd, environment: environment, captureOutput: false, allowFailure: false)
     }
@@ -701,7 +703,7 @@ private enum Command {
     }
 }
 
-private struct ToolError: Error {
+struct ToolError: Error {
     let message: String
 
     init(_ message: String) {

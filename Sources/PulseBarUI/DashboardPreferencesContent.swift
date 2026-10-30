@@ -42,6 +42,8 @@ public struct DashboardPreferencesState {
     public var canApplyPort = false
     public var canTestConnection = true
     public var canSignIn = false
+    public var canRetrySessionRemoval = false
+    public var canRetrySessionLoad = false
     public var feedback: PreferencesFeedback?
     public var accountNote: String?
 
@@ -58,6 +60,7 @@ public struct DashboardPreferencesActions {
     public var copyTunnel: () -> Void = {}
     public var signIn: () -> Void = {}
     public var signOut: () -> Void = {}
+    public var retrySessionLoad: () -> Void = {}
 
     public init() {}
 }
@@ -237,6 +240,13 @@ public struct DashboardPreferencesContent<AdditionalCards: View>: View {
             }
             if let note = state.accountNote {
                 feedbackRow(PreferencesFeedback(note, tone: state.accountName == nil ? .neutral : .warning))
+            }
+            if state.canRetrySessionRemoval {
+                Button("Retry Removing Session", action: actions.signOut)
+            }
+            if state.canRetrySessionLoad {
+                Button("Retry Saved Session", action: actions.retrySessionLoad)
+                Button("Remove Saved Session", action: actions.signOut)
             }
         }
     }

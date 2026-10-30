@@ -9,15 +9,15 @@ final class DashboardSessionStoreTests: XCTestCase {
     func testTokenCanBeInsertedUpdatedAndCleared() throws {
         let keychain = MemoryDashboardKeychain()
         let store = makeStore(keychain: keychain)
-        XCTAssertNil(store.loadToken())
+        XCTAssertNil(try store.loadToken())
         try store.saveToken("first-fake-token")
-        XCTAssertEqual(store.loadToken(), "first-fake-token")
+        XCTAssertEqual(try store.loadToken(), "first-fake-token")
         XCTAssertEqual(keychain.addCount, 1)
         try store.saveToken("replacement-fake-token")
-        XCTAssertEqual(store.loadToken(), "replacement-fake-token")
+        XCTAssertEqual(try store.loadToken(), "replacement-fake-token")
         XCTAssertEqual(keychain.addCount, 1)
-        store.clearToken()
-        XCTAssertNil(store.loadToken())
+        try store.clearToken()
+        XCTAssertNil(try store.loadToken())
     }
 
     func testUpdateFailureIsReportedWithoutTryingToAdd() throws {
@@ -27,26 +27,31 @@ final class DashboardSessionStoreTests: XCTestCase {
         keychain.updateStatus = errSecAuthFailed
         assertSaveFailure(store, status: errSecAuthFailed)
         XCTAssertEqual(keychain.addCount, 1)
-        XCTAssertEqual(store.loadToken(), "existing-fake-token")
+        XCTAssertEqual(try store.loadToken(), "existing-fake-token")
     }
 
-    func testInsertFailureIsReported() {
+    func testInsertFailureIsReported() throws {
         let keychain = MemoryDashboardKeychain()
         keychain.addStatus = errSecInteractionNotAllowed
         let store = makeStore(keychain: keychain)
         assertSaveFailure(store, status: errSecInteractionNotAllowed)
-        XCTAssertNil(store.loadToken())
+        XCTAssertNil(try store.loadToken())
     }
 
-    func testUnreadableTokensAreTreatedAsMissing() throws {
+    func testUnreadableTokensAreReported() throws {
         let keychain = MemoryDashboardKeychain()
         let store = makeStore(keychain: keychain)
         try store.saveToken("fake-token")
         keychain.readStatus = errSecAuthFailed
-        XCTAssertNil(store.loadToken())
+        XCTAssertThrowsError(try store.loadToken()) { error in
+            guard case SessionStoreError.keychainReadFailed(let status) = error else { return XCTFail("Unexpected error: \(error)") }
+            XCTAssertEqual(status, errSecAuthFailed)
+        }
         keychain.readStatus = nil
         keychain.readData = Data([0xFF])
-        XCTAssertNil(store.loadToken())
+        XCTAssertThrowsError(try store.loadToken()) { error in
+            guard case SessionStoreError.invalidTokenData = error else { return XCTFail("Unexpected error: \(error)") }
+        }
     }
 
     func testTokenOperationsStayIsolatedBetweenEndpoints() throws {
@@ -55,11 +60,29 @@ final class DashboardSessionStoreTests: XCTestCase {
         let second = makeStore(keychain: keychain, endpoint: try DashboardEndpoint(port: 11001))
         try first.saveToken("first-endpoint-token")
         try second.saveToken("second-endpoint-token")
-        XCTAssertEqual(first.loadToken(), "first-endpoint-token")
-        XCTAssertEqual(second.loadToken(), "second-endpoint-token")
-        first.clearToken()
-        XCTAssertNil(first.loadToken())
-        XCTAssertEqual(second.loadToken(), "second-endpoint-token")
+        XCTAssertEqual(try first.loadToken(), "first-endpoint-token")
+        XCTAssertEqual(try second.loadToken(), "second-endpoint-token")
+        try first.clearToken()
+        XCTAssertNil(try first.loadToken())
+        XCTAssertEqual(try second.loadToken(), "second-endpoint-token")
+    }
+
+    func testDeletionFailureIsReportedAndTokenIsRetained() throws {
+        let keychain = MemoryDashboardKeychain()
+        let store = makeStore(keychain: keychain)
+        try store.clearToken()  // An absent item is already cleared.
+        try store.saveToken("fake-token")
+        keychain.deleteStatus = errSecAuthFailed
+        XCTAssertThrowsError(try store.clearToken()) { error in
+            guard case SessionStoreError.keychainDeleteFailed(let status) = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+            XCTAssertEqual(status, errSecAuthFailed)
+        }
+        XCTAssertEqual(try store.loadToken(), "fake-token")
+        keychain.deleteStatus = nil
+        try store.clearToken()
+        XCTAssertNil(try store.loadToken())
     }
 
     private func makeStore(keychain: MemoryDashboardKeychain, endpoint: DashboardEndpoint = .standard) -> DashboardSessionStore {
@@ -92,6 +115,7 @@ private final class MemoryDashboardKeychain: DashboardKeychainAccessing {
     var addStatus: OSStatus?
     var readStatus: OSStatus?
     var readData: Data?
+    var deleteStatus: OSStatus?
 
     func copyMatching(_ query: [String: Any]) -> (OSStatus, Data?) {
         if let readStatus { return (readStatus, nil) }
@@ -114,7 +138,8 @@ private final class MemoryDashboardKeychain: DashboardKeychainAccessing {
     }
 
     func delete(_ query: [String: Any]) -> OSStatus {
-        items.removeValue(forKey: key(query)) == nil ? errSecItemNotFound : errSecSuccess
+        if let deleteStatus { return deleteStatus }
+        return items.removeValue(forKey: key(query)) == nil ? errSecItemNotFound : errSecSuccess
     }
 
     private func key(_ query: [String: Any]) -> String {
