@@ -27,13 +27,24 @@ struct SystemDashboardKeychain: DashboardKeychainAccessing {
 }
 
 enum SessionStoreError: LocalizedError {
+    case keychainReadFailed(OSStatus)
     case keychainSaveFailed(OSStatus)
+    case keychainDeleteFailed(OSStatus)
+    case invalidTokenData
 
     var errorDescription: String? {
         switch self {
+        case .keychainReadFailed(let status):
+            let statusMessage = SecCopyErrorMessageString(status, nil) as String? ?? "OSStatus \(status)"
+            return "PulseBar could not read the dashboard session token from Keychain: \(statusMessage)."
         case .keychainSaveFailed(let status):
             let statusMessage = SecCopyErrorMessageString(status, nil) as String? ?? "OSStatus \(status)"
             return "PulseBar could not save the dashboard session token to Keychain: \(statusMessage)."
+        case .keychainDeleteFailed(let status):
+            let statusMessage = SecCopyErrorMessageString(status, nil) as String? ?? "OSStatus \(status)"
+            return "PulseBar could not remove the dashboard session token from Keychain: \(statusMessage)."
+        case .invalidTokenData:
+            return "PulseBar could not read the dashboard session token because its Keychain data is invalid."
         }
     }
 }
@@ -43,9 +54,9 @@ protocol DashboardSessionStoring {
     func loadUsername() -> String
     func saveUsername(_ username: String)
     func clearUsername()
-    func loadToken() -> String?
+    func loadToken() throws -> String?
     func saveToken(_ token: String) throws
-    func clearToken()
+    func clearToken() throws
 }
 
 struct DashboardSessionStore: DashboardSessionStoring {
@@ -77,17 +88,18 @@ struct DashboardSessionStore: DashboardSessionStoring {
         defaults.removeObject(forKey: usernameKey)
     }
 
-    func loadToken() -> String? {
+    func loadToken() throws -> String? {
         var query = keychainQuery
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         query[kSecReturnData as String] = true
 
         let (status, result) = keychain.copyMatching(query)
-        guard status == errSecSuccess, let data = result else {
-            return nil
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess else { throw SessionStoreError.keychainReadFailed(status) }
+        guard let data = result, let token = String(data: data, encoding: .utf8) else {
+            throw SessionStoreError.invalidTokenData
         }
-
-        return String(data: data, encoding: .utf8)
+        return token
     }
 
     func saveToken(_ token: String) throws {
@@ -115,8 +127,11 @@ struct DashboardSessionStore: DashboardSessionStoring {
         }
     }
 
-    func clearToken() {
-        _ = keychain.delete(keychainQuery)
+    func clearToken() throws {
+        let status = keychain.delete(keychainQuery)
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw SessionStoreError.keychainDeleteFailed(status)
+        }
     }
 
     private var keychainQuery: [String: Any] {
