@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.3 - 2026-11-12
+
+- Remember the selected history range and chart scale between launches.
+- Show the time and value of nearby samples when hovering over the RAM and GPU charts.
+- Simplify the telemetry panel header and move About and reconnect actions into the menu.
+- Improve handling of saved dashboard sessions when Keychain access fails.
+- Update release preflight checks and align the CI Xcode version.
+
 ## 0.2.2 - 2026-10-23
 
 - Upgrade Sparkle to 2.10.0.
