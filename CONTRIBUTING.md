@@ -201,7 +201,7 @@ continue to apply.
 The actions menu (⋯) in the panel header opens Preferences or the dashboard and quits
 PulseBar. Preferences and Quit also retain their ⌘, and ⌘Q shortcuts.
 
-The info button (ⓘ) beside the actions menu opens a compact About popover with the app
+The **About PulseBar** item in the actions menu opens a compact About popover with the app
 icon, version and build, release date, and project links. Version information comes from
 the running app bundle. Packaging stamps `PulseBarReleaseDate` from the dated changelog
 section for `APP_VERSION`; `RELEASE_DATE` can override it. Source runs show “Development

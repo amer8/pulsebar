@@ -4,13 +4,18 @@ import SwiftUI
 @MainActor
 struct MetricsDetailView: View {
     @ObservedObject var viewModel: MetricsViewModel
-    @State private var historySeconds = 300
+    @AppStorage("PulseBar.HistorySeconds") private var historySeconds = 300
+    @AppStorage("PulseBar.AutomaticChartScale") private var automaticScale = true
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
             TelemetryHistoryPanel(
-                state: presentation(at: context.date), now: context.date, historySeconds: $historySeconds, actions: actions)
+                state: presentation(at: context.date), now: context.date,
+                historySeconds: Binding(
+                    get: { historyWindow.rawValue },
+                    set: { historySeconds = $0 }),
+                actions: actions, automaticScale: $automaticScale)
         }
     }
 
@@ -25,7 +30,7 @@ struct MetricsDetailView: View {
         state.usedMemoryGiB = viewModel.snapshot.memory.usedGiB
         state.totalMemoryGiB = viewModel.snapshot.memory.totalGiB
         if state.memoryPercent != nil { state.freeMemoryGiB = viewModel.history.samples.last?.freeGiB }
-        state.points = viewModel.history.points(in: HistoryWindow(rawValue: historySeconds) ?? .fiveMinutes, at: date).map {
+        state.points = viewModel.history.points(in: historyWindow, at: date).map {
             TelemetryChartPoint(timestamp: $0.timestamp, memoryPercent: $0.memoryPercent, gpuPercent: $0.gpuPercent, segment: $0.segment)
         }
         state.note = viewModel.snapshot.gpu.note
@@ -33,6 +38,8 @@ struct MetricsDetailView: View {
         state.systemUpdateAvailable = viewModel.isUpdateAvailable
         return state
     }
+
+    private var historyWindow: HistoryWindow { HistoryWindow(rawValue: historySeconds) ?? .fiveMinutes }
 
     private var actions: TelemetryPanelActions {
         var actions = TelemetryPanelActions()

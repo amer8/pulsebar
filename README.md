@@ -1,6 +1,6 @@
 
 <p align="center">
-  <img src="docs/assets/menu-preview.png" alt="PulseBar RAM and GPU history charts with the new info button and the About popover closed." width="830" height="488">
+  <img src="docs/assets/menu-preview.png" alt="PulseBar RAM and GPU history charts with the actions menu closed." width="830" height="488">
 </p>
 
 [![CI](https://github.com/amer8/pulsebar/actions/workflows/quality.yml/badge.svg?branch=main)](https://github.com/amer8/pulsebar/actions/workflows/quality.yml)
@@ -46,8 +46,8 @@ Alternatively, download the latest [GitHub Release](https://github.com/amer8/pul
 
 Signed direct-download builds can check for app updates from the PulseBar menu.
 
-Click the info button (ⓘ) in the telemetry panel header to see the app version, build,
-release date, and project links.
+Choose **About PulseBar** from the telemetry panel’s actions menu (···) to see the app
+version, build, release date, and project links.
 
 ## First Run
 

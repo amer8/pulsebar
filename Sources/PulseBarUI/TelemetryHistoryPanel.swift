@@ -51,34 +51,45 @@ public enum TelemetryChartScale {
     }
 }
 
+public enum TelemetryChartSelection {
+    public static func nearest(
+        to date: Date, in points: [TelemetryChartPoint], within maximumDistance: TimeInterval
+    ) -> TelemetryChartPoint? {
+        guard maximumDistance >= 0,
+            let point = points.min(by: { abs($0.timestamp.timeIntervalSince(date)) < abs($1.timestamp.timeIntervalSince(date)) }),
+            abs(point.timestamp.timeIntervalSince(date)) <= maximumDistance
+        else { return nil }
+        return point
+    }
+}
+
 // Used by both the menu-bar window and native previews.
 public struct TelemetryHistoryPanel: View {
     private let state: TelemetryPanelState
     private let now: Date
     private let actions: TelemetryPanelActions
     @Binding private var historySeconds: Int
-    @State private var automaticScale: Bool
+    @Binding private var automaticScale: Bool
     @State private var isShowingAbout = false
 
     public init(
         state: TelemetryPanelState, now: Date, historySeconds: Binding<Int>, actions: TelemetryPanelActions,
-        automaticScale: Bool = true
+        automaticScale: Binding<Bool> = .constant(true)
     ) {
         self.state = state
         self.now = now
         _historySeconds = historySeconds
         self.actions = actions
-        _automaticScale = State(initialValue: automaticScale)
+        _automaticScale = automaticScale
     }
 
     public static func preferredSize(for state: TelemetryPanelState) -> CGSize {
-        CGSize(width: 400, height: state.systemUpdateAvailable ? 452 : 424)
+        CGSize(width: 400, height: state.systemUpdateAvailable ? 416 : 388)
     }
 
     public var body: some View {
         ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: 16) {
-                header
                 historyControls
                 if state.points.isEmpty {
                     readingHeader("RAM", symbol: "memorychip", value: state.memoryPercent, peak: nil, detail: memoryDetail)
@@ -113,48 +124,31 @@ public struct TelemetryHistoryPanel: View {
         .background(Color(nsColor: .windowBackgroundColor))
     }
 
-    private var header: some View {
-        HStack(spacing: 9) {
-            Image(systemName: "waveform.path.ecg")
-                .font(.system(size: 16, weight: .medium)).foregroundStyle(.blue)
-                .frame(width: 29, height: 29).background(.blue.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
-            VStack(alignment: .leading, spacing: 3) {
-                Text("PulseBar").font(.system(size: 14, weight: .semibold))
-                HStack(spacing: 5) {
-                    Circle().fill(connectionColor).frame(width: 5, height: 5)
-                    Text(state.connectionTitle)
-                    if state.lastSampleAt != nil { Text("· " + sampleAge) }
-                }.font(.caption).foregroundStyle(.secondary).lineLimit(1)
-            }
-            Spacer(minLength: 0)
+    private var actionsMenu: some View {
+        Menu {
+            Button(action: actions.openDashboard) { Label("Open Dashboard", systemImage: "safari") }
             if state.canReconnect {
-                Button(action: actions.reconnect) { Image(systemName: "arrow.clockwise").padding(6) }
-                    .buttonStyle(.plain).foregroundStyle(.secondary)
-                    .help("Reconnect to dashboard").accessibilityLabel("Reconnect to dashboard")
+                Button(action: actions.reconnect) { Label("Reconnect", systemImage: "arrow.clockwise") }
             }
+            Button(action: actions.openPreferences) { Label("Preferences…", systemImage: "gearshape") }
+                .keyboardShortcut(",", modifiers: .command)
+            Divider()
             Button {
-                isShowingAbout.toggle()
+                isShowingAbout = true
             } label: {
-                Image(systemName: "info.circle").font(.system(size: 16)).padding(6)
+                Label("About PulseBar", systemImage: "info.circle")
             }
-            .buttonStyle(.plain).foregroundStyle(.secondary)
-            .help("About PulseBar").accessibilityLabel("About PulseBar")
-            .popover(isPresented: $isShowingAbout, arrowEdge: .top) {
-                PulseBarAboutContent().onExitCommand { isShowingAbout = false }
-            }
-            Menu {
-                Button(action: actions.openPreferences) { Label("Preferences…", systemImage: "gearshape") }
-                    .keyboardShortcut(",", modifiers: .command)
-                Button(action: actions.openDashboard) { Label("Open Dashboard", systemImage: "safari") }
-                Divider()
-                Button(action: actions.quit) { Label("Quit PulseBar", systemImage: "power") }
-                    .keyboardShortcut("q", modifiers: .command)
-            } label: {
-                Image(systemName: "ellipsis.circle").font(.system(size: 16)).padding(6)
-            }
-            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-            .foregroundStyle(.secondary)
-            .help("Preferences, dashboard, and quit").accessibilityLabel("PulseBar actions")
+            Divider()
+            Button(action: actions.quit) { Label("Quit PulseBar", systemImage: "power") }
+                .keyboardShortcut("q", modifiers: .command)
+        } label: {
+            Image(systemName: "ellipsis.circle").font(.system(size: 16)).padding(6)
+        }
+        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+        .foregroundStyle(.secondary)
+        .help("Dashboard, preferences, about, and quit").accessibilityLabel("PulseBar actions")
+        .popover(isPresented: $isShowingAbout, arrowEdge: .top) {
+            PulseBarAboutContent().onExitCommand { isShowingAbout = false }
         }
     }
 
@@ -163,6 +157,9 @@ public struct TelemetryHistoryPanel: View {
         guard let date = state.lastSampleAt else { return "" }
         let seconds = max(0, Int(now.timeIntervalSince(date)))
         return seconds < 2 ? "just updated" : (seconds < 60 ? "\(seconds)s ago" : "\(seconds / 60)m ago")
+    }
+    private var connectionDescription: String {
+        state.connectionTitle + (state.lastSampleAt == nil ? "" : " · " + sampleAge)
     }
     private var memoryDetail: String {
         guard let used = state.usedMemoryGiB, let total = state.totalMemoryGiB else { return "Waiting for readings" }
@@ -173,14 +170,29 @@ public struct TelemetryHistoryPanel: View {
     private var gpuDetail: String { state.gpuPercent == nil ? "Waiting for readings" : "Graphics utilization" }
 
     private var historyControls: some View {
-        HStack {
-            Picker("History range", selection: $historySeconds) {
-                Text("1 min").tag(60)
-                Text("5 min").tag(300)
-                Text("15 min").tag(900)
+        HStack(spacing: 8) {
+            Text("PulseBar")
+                .font(.system(size: 12, weight: .semibold))
+            Circle().fill(connectionColor).frame(width: 6, height: 6)
+                .help(connectionDescription)
+                .accessibilityLabel("Connection status")
+                .accessibilityValue(connectionDescription)
+            Spacer(minLength: 8)
+            Button {
+                switch historySeconds {
+                case 60: historySeconds = 300
+                case 300: historySeconds = 900
+                default: historySeconds = 60
+                }
+            } label: {
+                Text("Range: \(historySeconds / 60) min")
+                    .font(.caption).foregroundStyle(.secondary).padding(.horizontal, 8).padding(.vertical, 4)
+                    .background(.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 5))
             }
-            .labelsHidden().pickerStyle(.segmented).controlSize(.small).frame(width: 176)
-            Spacer()
+            .buttonStyle(.plain)
+            .help("Click to switch between 1, 5, and 15 minutes.")
+            .accessibilityLabel("History range")
+            .accessibilityValue("\(historySeconds / 60) minutes")
             Button {
                 automaticScale.toggle()
             } label: {
@@ -194,6 +206,7 @@ public struct TelemetryHistoryPanel: View {
             )
             .accessibilityLabel("Chart scale")
             .accessibilityValue(automaticScale ? "Automatic" : "0 to 100 percent")
+            actionsMenu
         }
     }
 
@@ -215,43 +228,10 @@ public struct TelemetryHistoryPanel: View {
     ) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             readingHeader(title, symbol: symbol, value: value, peak: values.max(), detail: detail)
-            metricChart(
-                title, keyPath: keyPath, upperBound: TelemetryChartScale.upperBound(for: values, automatic: automaticScale), color: color)
+            TelemetryMetricChart(
+                title, keyPath: keyPath, upperBound: TelemetryChartScale.upperBound(for: values, automatic: automaticScale), color: color,
+                points: state.points, now: now, historySeconds: historySeconds)
         }
-    }
-
-    private func metricChart(_ title: String, keyPath: KeyPath<TelemetryChartPoint, Double>, upperBound: Double, color: Color) -> some View
-    {
-        Chart {
-            ForEach(state.points) { point in
-                LineMark(
-                    x: .value("Time", point.timestamp), y: .value(title, point[keyPath: keyPath]),
-                    series: .value("Segment", point.segment)
-                )
-                .foregroundStyle(color).lineStyle(StrokeStyle(lineWidth: 2))
-            }
-            if let last = state.points.last {
-                PointMark(x: .value("Time", last.timestamp), y: .value(title, last[keyPath: keyPath]))
-                    .foregroundStyle(color).symbolSize(20)
-            }
-        }
-        .chartYScale(domain: 0...upperBound, range: .plotDimension(startPadding: 4, endPadding: 4))
-        .chartXScale(domain: now.addingTimeInterval(-Double(historySeconds))...now)
-        .chartLegend(.hidden).chartXAxis(.hidden)
-        .chartYAxis {
-            AxisMarks(position: .leading, values: [0, upperBound / 2, upperBound]) { value in
-                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
-                AxisValueLabel {
-                    if let percent = value.as(Double.self) {
-                        Text("\(number(percent, digits: 1))%").font(.system(size: 10))
-                            .lineLimit(1).fixedSize(horizontal: true, vertical: false).frame(width: 40, alignment: .trailing)
-                    }
-                }
-            }
-        }
-        .frame(height: 86)
-        .accessibilityLabel(
-            "\(title) utilization over the last \(historySeconds / 60) minutes, scale 0 to \(number(upperBound, digits: 0)) percent")
     }
 
     private var timeAxis: some View {
@@ -276,5 +256,112 @@ public struct TelemetryHistoryPanel: View {
     }
 
     private func percent(_ value: Double?) -> String { value.map { "\(Int($0.rounded()))%" } ?? "—" }
+    private func number(_ value: Double, digits: Int = 2) -> String { value.formatted(.number.precision(.fractionLength(0...digits))) }
+}
+
+private struct TelemetryMetricChart: View {
+    let title: String
+    let keyPath: KeyPath<TelemetryChartPoint, Double>
+    let upperBound: Double
+    let color: Color
+    let points: [TelemetryChartPoint]
+    let now: Date
+    let historySeconds: Int
+    @State private var hoveredTimestamp: Date?
+
+    init(
+        _ title: String, keyPath: KeyPath<TelemetryChartPoint, Double>, upperBound: Double, color: Color,
+        points: [TelemetryChartPoint], now: Date, historySeconds: Int
+    ) {
+        self.title = title
+        self.keyPath = keyPath
+        self.upperBound = upperBound
+        self.color = color
+        self.points = points
+        self.now = now
+        self.historySeconds = historySeconds
+    }
+
+    var body: some View {
+        Chart {
+            ForEach(points) { point in
+                LineMark(
+                    x: .value("Time", point.timestamp), y: .value(title, point[keyPath: keyPath]),
+                    series: .value("Segment", point.segment)
+                )
+                .foregroundStyle(color).lineStyle(StrokeStyle(lineWidth: 2))
+            }
+            if let last = points.last {
+                PointMark(x: .value("Time", last.timestamp), y: .value(title, last[keyPath: keyPath]))
+                    .foregroundStyle(color).symbolSize(20)
+            }
+        }
+        .chartYScale(domain: 0...upperBound, range: .plotDimension(startPadding: 4, endPadding: 4))
+        .chartXScale(domain: now.addingTimeInterval(-Double(historySeconds))...now)
+        .chartLegend(.hidden).chartXAxis(.hidden)
+        .chartYAxis {
+            AxisMarks(position: .leading, values: [0, upperBound / 2, upperBound]) { value in
+                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
+                AxisValueLabel {
+                    if let percent = value.as(Double.self) {
+                        Text("\(number(percent, digits: 1))%").font(.system(size: 10))
+                            .lineLimit(1).fixedSize(horizontal: true, vertical: false).frame(width: 40, alignment: .trailing)
+                    }
+                }
+            }
+        }
+        .chartOverlay { proxy in
+            GeometryReader { geometry in
+                let plot = geometry[proxy.plotAreaFrame]
+                ZStack(alignment: .topLeading) {
+                    if let timestamp = hoveredTimestamp,
+                        let point = points.first(where: { $0.timestamp == timestamp }),
+                        let x = proxy.position(forX: point.timestamp),
+                        let y = proxy.position(forY: point[keyPath: keyPath])
+                    {
+                        Rectangle().fill(Color.secondary.opacity(0.6))
+                            .frame(width: 1, height: plot.height)
+                            .position(x: plot.minX + x, y: plot.midY)
+                        Circle().fill(color).frame(width: 7, height: 7)
+                            .overlay(Circle().stroke(Color(nsColor: .windowBackgroundColor), lineWidth: 1))
+                            .position(x: plot.minX + x, y: plot.minY + y)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(point.timestamp, format: .dateTime.hour().minute().second())
+                            Text("\(title) \(number(point[keyPath: keyPath], digits: 1))%")
+                        }
+                        .font(.system(size: 10, weight: .medium)).monospacedDigit()
+                        .padding(5)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 5))
+                        .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color.secondary.opacity(0.2), lineWidth: 0.5))
+                        .fixedSize()
+                        .position(x: min(max(plot.minX + x, plot.minX + 42), plot.maxX - 42), y: plot.minY + 18)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .contentShape(Rectangle())
+                .onContinuousHover { phase in
+                    switch phase {
+                    case .active(let location):
+                        guard plot.contains(location), plot.width > 0,
+                            let date: Date = proxy.value(atX: location.x - plot.minX)
+                        else {
+                            hoveredTimestamp = nil
+                            return
+                        }
+                        let tolerance = Double(historySeconds) * 24 / plot.width
+                        hoveredTimestamp = TelemetryChartSelection.nearest(to: date, in: points, within: tolerance)?.timestamp
+                    case .ended:
+                        hoveredTimestamp = nil
+                    }
+                }
+            }
+        }
+        .frame(height: 86)
+        .accessibilityLabel(
+            "\(title) utilization over the last \(historySeconds / 60) minutes, scale 0 to \(number(upperBound, digits: 0)) percent"
+        )
+        .onChange(of: historySeconds) { _ in hoveredTimestamp = nil }
+    }
+
     private func number(_ value: Double, digits: Int = 2) -> String { value.formatted(.number.precision(.fractionLength(0...digits))) }
 }

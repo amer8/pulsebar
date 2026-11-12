@@ -799,7 +799,7 @@ private enum ReadmeAssetRenderer {
                 let panel = try nativeImage(
                     TelemetryHistoryPanel(
                         state: state, now: reference, historySeconds: .constant(300), actions: TelemetryPanelActions(),
-                        automaticScale: name != "full-scale"),
+                        automaticScale: .constant(name != "full-scale")),
                     size: TelemetryHistoryPanel.preferredSize(for: state), scheme: scheme)
                 try panel.writePNG(to: directory.appendingPathComponent("panel-\(name)-\(scheme == .light ? "light" : "dark").png"))
             }
