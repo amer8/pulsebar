@@ -3,6 +3,19 @@
     <channel>
         <title>PulseBar</title>
         <item>
+            <title>0.2.4</title>
+            <pubDate>Mon, 16 Nov 2026 23:33:58 +0100</pubDate>
+            <link>https://raw.githubusercontent.com/amer8/pulsebar/main/appcast.xml</link>
+            <sparkle:version>6</sparkle:version>
+            <sparkle:shortVersionString>0.2.4</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description><![CDATA[<ul><li>Pause automatic reconnection after repeated telemetry failures, including across app restarts; choose Reconnect to resume.</li><li>Keep the telemetry stream running when an individual event contains invalid data.</li><li>Reduce per-sample logging and avoid increasing retry delays for cancelled streams.</li><li>Improve release preflight, appcast verification, and release asset checks.</li><li>Document the Apple silicon requirement and local dashboard connection security.</li></ul>
+
+]]></description>
+            <enclosure url="https://github.com/amer8/pulsebar/releases/download/v0.2.4/PulseBar-0.2.4.zip" length="4335494" type="application/octet-stream" sparkle:edSignature="mpf6P63NgcZJfO3fL6og0msBMmIMeZfEwVJRHt5870w2ASzY3GkCtMlJfx+wGHEqCjPtK631HdEGfrTvzpP5Ag=="/>
+        </item>
+        <item>
             <title>0.2.3</title>
             <pubDate>Thu, 12 Nov 2026 22:39:43 +0100</pubDate>
             <link>https://raw.githubusercontent.com/amer8/pulsebar/main/appcast.xml</link>
@@ -27,32 +40,6 @@
 
 ]]></description>
             <enclosure url="https://github.com/amer8/pulsebar/releases/download/v0.2.2/PulseBar-0.2.2.zip" length="4308508" type="application/octet-stream" sparkle:edSignature="J+n9/lh8mrOI4sMQL9BTQLP1EotOI+V9HTXfn6ZpjKQkzLdozHiNdNe3DFrcQXH77G9X6Yu8IFRtN+pKXEXvDg=="/>
-        </item>
-        <item>
-            <title>0.2.1</title>
-            <pubDate>Tue, 20 Oct 2026 11:50:15 +0200</pubDate>
-            <link>https://github.com/amer8/pulsebar</link>
-            <sparkle:version>3</sparkle:version>
-            <sparkle:shortVersionString>0.2.1</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description><![CDATA[<ul><li>Add an About popover to the telemetry panel with the app version, build number, release date, and project links.</li></ul>
-
-]]></description>
-            <enclosure url="https://github.com/amer8/pulsebar/releases/download/v0.2.1/PulseBar-0.2.1.zip" length="4329680" type="application/octet-stream" sparkle:edSignature="Ubmlm4uCx78l3zwHVCjca9rq9QdB2IVP3JsJvACHxZkdXjt3rhfmq3Isu6+4JcEerHyNJ362pyKsL6p/GcIBAw=="/>
-        </item>
-        <item>
-            <title>0.2.0</title>
-            <pubDate>Thu, 15 Oct 2026 15:28:30 +0200</pubDate>
-            <link>https://github.com/amer8/pulsebar</link>
-            <sparkle:version>2</sparkle:version>
-            <sparkle:shortVersionString>0.2.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description><![CDATA[<ul><li>Add a telemetry panel with separate RAM and GPU charts, 1-, 5-, and 15-minute history windows, current and peak utilization, and available memory.</li><li>Add automatic chart scaling and a full 0–100% scale option.</li><li>Let Preferences control whether the menu bar shows RAM, GPU, both readings, or an icon.</li><li>Show connection health and sample age, add manual reconnect, and recover automatically from stale streams, connection failures, and wake from sleep.</li><li>Add guided dashboard setup with a configurable local port, connection testing, NVIDIA Sync and SSH tunnel shortcuts, and inline sign-in errors.</li><li>Keep saved dashboard sessions separate for each local port and support current KiB telemetry fields alongside older payloads.</li><li>Add opt-in launch at login, a first-run welcome guide, and Preferences that adapt to the available screen space.</li><li>Add a `--demo` mode for exploring telemetry without using saved dashboard credentials.</li><li>Keep Preferences, Open Dashboard, and Quit available from the panel&#39;s actions menu.</li></ul>
-
-]]></description>
-            <enclosure url="https://github.com/amer8/pulsebar/releases/download/v0.2.0/PulseBar-0.2.0.zip" length="4308162" type="application/octet-stream" sparkle:edSignature="992Q68tMZDOdbmZDpzD6b2cUu+CYH+xymH9/Q40ZwXkAlNh4tjZSysfaeZe9EaGLVpC9vHqrnCRw66pxlJmkDA=="/>
         </item>
     </channel>
 </rss>
