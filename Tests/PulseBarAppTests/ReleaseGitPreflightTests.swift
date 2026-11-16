@@ -4,6 +4,19 @@ import XCTest
 @testable import PulseBarTools
 
 final class ReleaseGitPreflightTests: XCTestCase {
+    func testRejectsExistingLocalAndRemoteTags() throws {
+        let fixture = try GitFixture()
+        defer { fixture.remove() }
+        try fixture.commit("first")
+        XCTAssertNoThrow(try ReleaseGitPreflight.validateTag("v1.0", root: fixture.local))
+        try fixture.git(["tag", "v1.0"])
+        XCTAssertThrowsError(try ReleaseGitPreflight.validateTag("v1.0", root: fixture.local))
+        try fixture.git(["push", "origin", "v1.0"])
+        try fixture.git(["tag", "-d", "v1.0"])
+        XCTAssertThrowsError(try ReleaseGitPreflight.validateTag("v1.0", root: fixture.local))
+        XCTAssertNoThrow(try ReleaseGitPreflight.validateTag("v1.0.1", root: fixture.local))
+    }
+
     func testAllowsMainAheadOfRemoteAndRejectsOtherBranches() throws {
         let fixture = try GitFixture()
         defer { fixture.remove() }

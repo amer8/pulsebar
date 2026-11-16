@@ -9,7 +9,7 @@
 
 ## Requirements
 
-- macOS 13 Ventura or newer.
+- A Mac with Apple silicon running macOS 13 Ventura or newer.
 - Local DGX Dashboard reachable at `http://127.0.0.1:11000` through either NVIDIA Sync or a manual SSH tunnel.
 - Valid dashboard credentials.
 
@@ -54,8 +54,10 @@ version, build, release date, and project links.
 1. Launch PulseBar.
 2. Open `Preferences…` from the menu bar item.
 3. Enter your dashboard username and password.
-4. After sign-in, PulseBar stores the returned token in Keychain and starts the telemetry stream.
+4. After sign-in, PulseBar stores the returned token in Keychain and starts the telemetry stream unless reconnection is paused.
 5. On later launches, PulseBar restores the saved session and reconnects automatically.
+   After five consecutive telemetry failures, reconnection pauses for that local port, even
+   after a restart. Choose **Reconnect** from the telemetry panel’s actions menu (···) to resume.
 
 ## Development
 

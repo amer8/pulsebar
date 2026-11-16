@@ -70,28 +70,58 @@ final class ConnectionIntegrationTests: XCTestCase {
         let session = URLSession(configuration: .ephemeral)
         let model = MetricsViewModel(
             dashboard: DashboardClient(baseURL: server.url, session: session), sessionStore: MemorySessionStore())
-        let menu = MetricsMenuView(viewModel: model)
         defer {
             model.signOut()
             session.invalidateAndCancel()
             server.stop()
         }
 
-        XCTAssertEqual(menu.menuState.connectionHealth.state, .connecting)
-        XCTAssertEqual(menu.menuState.snapshot.menuBarTitle, "RAM -- GPU --")
+        XCTAssertEqual(model.connectionHealth.state, .connecting)
+        XCTAssertEqual(model.snapshot.menuBarTitle, "RAM -- GPU --")
         try await waitUntil { model.connectionHealth.state == .live }
-        XCTAssertEqual(menu.menuState.connectionHealth.state, .live)
-        XCTAssertNotNil(menu.menuState.connectionHealth.lastSampleAt)
-        XCTAssertEqual(menu.menuState.snapshot.menuBarTitle, model.snapshot.menuBarTitle)
-        XCTAssertNotEqual(menu.menuState.snapshot.menuBarTitle, "RAM -- GPU --")
-        XCTAssertTrue(model.debugMessages.contains { $0.contains("Received telemetry sample") })
+        XCTAssertEqual(model.connectionHealth.state, .live)
+        XCTAssertNotNil(model.connectionHealth.lastSampleAt)
+        XCTAssertNotEqual(model.snapshot.menuBarTitle, "RAM -- GPU --")
 
         model.refresh()
-        XCTAssertEqual(menu.menuState.connectionHealth.state, .reconnecting)
-        XCTAssertEqual(menu.menuState.snapshot.gpu.note, "Reconnecting to the local dashboard…")
-        XCTAssertEqual(menu.menuState.snapshot.menuBarTitle, "RAM -- GPU --")
+        XCTAssertEqual(model.connectionHealth.state, .reconnecting)
+        XCTAssertEqual(model.snapshot.gpu.note, "Reconnecting to the local dashboard…")
+        XCTAssertEqual(model.snapshot.menuBarTitle, "RAM -- GPU --")
         try await waitUntil { model.connectionHealth.state == .live }
-        XCTAssertNotEqual(menu.menuState.snapshot.menuBarTitle, "RAM -- GPU --")
+        XCTAssertNotEqual(model.snapshot.menuBarTitle, "RAM -- GPU --")
+    }
+
+    @MainActor
+    func testCarriageReturnLineEndingsDeliverTelemetry() async throws {
+        for scenario in [DashboardFixture.Scenario.carriageReturnOnly, .carriageReturnLineFeed] {
+            let server = try await DashboardFixture(scenario: scenario)
+            let session = URLSession(configuration: .ephemeral)
+            let model = MetricsViewModel(
+                dashboard: DashboardClient(baseURL: server.url, session: session), sessionStore: MemorySessionStore())
+            defer {
+                model.signOut()
+                session.invalidateAndCancel()
+                server.stop()
+            }
+            try await waitUntil { model.connectionHealth.state == .live }
+            XCTAssertEqual(model.snapshot.menuBarTitle, "RAM 50% GPU 37%", scenario.rawValue)
+        }
+    }
+
+    @MainActor
+    func testMalformedEventDoesNotPreventFollowingSample() async throws {
+        let server = try await DashboardFixture(scenario: .malformedThenLive)
+        let session = URLSession(configuration: .ephemeral)
+        let model = MetricsViewModel(
+            dashboard: DashboardClient(baseURL: server.url, session: session), sessionStore: MemorySessionStore())
+        defer {
+            model.signOut()
+            session.invalidateAndCancel()
+            server.stop()
+        }
+
+        try await waitUntil { model.connectionHealth.state == .live }
+        XCTAssertEqual(model.snapshot.menuBarTitle, "RAM 50% GPU 37%")
     }
 
     @MainActor
@@ -100,7 +130,6 @@ final class ConnectionIntegrationTests: XCTestCase {
         let session = URLSession(configuration: .ephemeral)
         let model = MetricsViewModel(
             dashboard: DashboardClient(baseURL: server.url, session: session), sessionStore: MemorySessionStore())
-        let menu = MetricsMenuView(viewModel: model)
         defer {
             model.signOut()
             session.invalidateAndCancel()
@@ -108,13 +137,12 @@ final class ConnectionIntegrationTests: XCTestCase {
         }
 
         try await waitUntil { model.connectionHealth.state == .waiting }
-        XCTAssertNil(menu.menuState.connectionHealth.lastSampleAt)
+        XCTAssertNil(model.connectionHealth.lastSampleAt)
         model.checkFreshness(at: Date().addingTimeInterval(31))
-        XCTAssertEqual(menu.menuState.connectionHealth.state, .stale)
-        XCTAssertEqual(menu.menuState.snapshot.gpu.note, "Telemetry is stale. Reconnecting…")
-        XCTAssertEqual(menu.menuState.snapshot.menuBarTitle, "RAM -- GPU --")
+        XCTAssertEqual(model.connectionHealth.state, .stale)
+        XCTAssertEqual(model.snapshot.gpu.note, "Telemetry is stale. Reconnecting…")
+        XCTAssertEqual(model.snapshot.menuBarTitle, "RAM -- GPU --")
         try await waitUntil { model.connectionHealth.state == .waiting }
-        XCTAssertTrue(model.debugMessages.contains { $0.contains("Telemetry stream responded with HTTP 200") })
     }
 
     @MainActor
@@ -123,19 +151,18 @@ final class ConnectionIntegrationTests: XCTestCase {
         let session = URLSession(configuration: .ephemeral)
         let store = MemorySessionStore()
         let model = MetricsViewModel(dashboard: DashboardClient(baseURL: server.url, session: session), sessionStore: store)
-        let menu = MetricsMenuView(viewModel: model)
         defer {
             model.signOut()
             session.invalidateAndCancel()
             server.stop()
         }
 
-        XCTAssertTrue(menu.menuState.isSignedIn)
+        XCTAssertTrue(model.isSignedIn)
         try await waitUntil { model.connectionHealth.state == .expired }
-        XCTAssertFalse(menu.menuState.isSignedIn)
+        XCTAssertFalse(model.isSignedIn)
         XCTAssertNil(store.token)
-        XCTAssertEqual(menu.menuState.snapshot.menuBarTitle, "RAM -- GPU --")
-        XCTAssertEqual(menu.menuState.snapshot.gpu.note, "Your dashboard session expired. Sign in again.")
+        XCTAssertEqual(model.snapshot.menuBarTitle, "RAM -- GPU --")
+        XCTAssertEqual(model.snapshot.gpu.note, "Your dashboard session expired. Sign in again.")
     }
 
     @MainActor
@@ -144,7 +171,6 @@ final class ConnectionIntegrationTests: XCTestCase {
         let session = URLSession(configuration: .ephemeral)
         let model = MetricsViewModel(
             dashboard: DashboardClient(baseURL: server.url, session: session), sessionStore: MemorySessionStore())
-        let menu = MetricsMenuView(viewModel: model)
         defer {
             model.signOut()
             session.invalidateAndCancel()
@@ -154,10 +180,10 @@ final class ConnectionIntegrationTests: XCTestCase {
         try await waitUntil { model.connectionHealth.state == .live }
         model.signOut()
         try await Task.sleep(for: .milliseconds(100))
-        XCTAssertEqual(menu.menuState.connectionHealth.state, .signedOut)
-        XCTAssertFalse(menu.menuState.isSignedIn)
-        XCTAssertNil(menu.menuState.connectionHealth.lastSampleAt)
-        XCTAssertEqual(menu.menuState.snapshot.menuBarTitle, "RAM -- GPU --")
+        XCTAssertEqual(model.connectionHealth.state, .signedOut)
+        XCTAssertFalse(model.isSignedIn)
+        XCTAssertNil(model.connectionHealth.lastSampleAt)
+        XCTAssertEqual(model.snapshot.menuBarTitle, "RAM -- GPU --")
     }
 
     @MainActor

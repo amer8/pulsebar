@@ -26,8 +26,25 @@ struct DashboardEndpoint: Equatable, Sendable {
     var tunnelCommand: String { "ssh -L \(port):localhost:11000 <username>@<IP-or-spark-hostname.local>" }
     var sessionAccount: String { port == 11000 ? "dashboard-token" : "dashboard-token:\(port)" }
     var usernameKey: String { port == 11000 ? "PulseBar.Dashboard.Username" : "PulseBar.Dashboard.Username.\(port)" }
+    var reconnectPausedKey: String { "PulseBar.Dashboard.ReconnectPaused.\(port)" }
 
     func save() { UserDefaults.standard.set(port, forKey: Self.preferenceKey) }
+}
+
+struct DashboardReconnectPauseStore {
+    var defaults: UserDefaults = .standard
+
+    func isPaused(for endpoint: DashboardEndpoint) -> Bool {
+        defaults.bool(forKey: endpoint.reconnectPausedKey)
+    }
+
+    func setPaused(_ paused: Bool, for endpoint: DashboardEndpoint) {
+        if paused {
+            defaults.set(true, forKey: endpoint.reconnectPausedKey)
+        } else {
+            defaults.removeObject(forKey: endpoint.reconnectPausedKey)
+        }
+    }
 }
 
 @MainActor

@@ -18,6 +18,7 @@ RESOURCES_DIR := $(CONTENTS_DIR)/Resources
 FRAMEWORKS_DIR := $(CONTENTS_DIR)/Frameworks
 INFO_PLIST := Packaging/Info.plist
 ICON_SOURCE := Packaging/Icon.icon
+SKIP_ICON ?= 0
 ICON_COMPOSER_TOOL ?= $(shell xcode-select -p)/../Applications/Icon Composer.app/Contents/Executables/ictool
 ICON_EXPORT := $(BUILD_DIR)/$(APP_NAME)-AppIcon.png
 ICON_FILE := AppIcon.icns
@@ -64,18 +65,20 @@ bundle: release
 		ln -sf "../Frameworks/Sparkle.framework" "$(MACOS_DIR)/Sparkle.framework"; \
 	fi
 	cp "$(INFO_PLIST)" "$(CONTENTS_DIR)/Info.plist"
-	"$(ICON_COMPOSER_TOOL)" "$(ICON_SOURCE)" --export-image --output-file "$(ICON_EXPORT)" --platform macOS --rendition Default --width 1024 --height 1024 --scale 1
-	sips -z 16 16 "$(ICON_EXPORT)" --out "$(ICONSET_DIR)/icon_16x16.png"
-	sips -z 32 32 "$(ICON_EXPORT)" --out "$(ICONSET_DIR)/icon_16x16@2x.png"
-	sips -z 32 32 "$(ICON_EXPORT)" --out "$(ICONSET_DIR)/icon_32x32.png"
-	sips -z 64 64 "$(ICON_EXPORT)" --out "$(ICONSET_DIR)/icon_32x32@2x.png"
-	sips -z 128 128 "$(ICON_EXPORT)" --out "$(ICONSET_DIR)/icon_128x128.png"
-	sips -z 256 256 "$(ICON_EXPORT)" --out "$(ICONSET_DIR)/icon_128x128@2x.png"
-	sips -z 256 256 "$(ICON_EXPORT)" --out "$(ICONSET_DIR)/icon_256x256.png"
-	sips -z 512 512 "$(ICON_EXPORT)" --out "$(ICONSET_DIR)/icon_256x256@2x.png"
-	sips -z 512 512 "$(ICON_EXPORT)" --out "$(ICONSET_DIR)/icon_512x512.png"
-	sips -z 1024 1024 "$(ICON_EXPORT)" --out "$(ICONSET_DIR)/icon_512x512@2x.png"
-	iconutil -c icns "$(ICONSET_DIR)" -o "$(RESOURCES_DIR)/$(ICON_FILE)"
+	@set -e; if [ "$(SKIP_ICON)" != "1" ]; then \
+		"$(ICON_COMPOSER_TOOL)" "$(ICON_SOURCE)" --export-image --output-file "$(ICON_EXPORT)" --platform macOS --rendition Default --width 1024 --height 1024 --scale 1; \
+		sips -z 16 16 "$(ICON_EXPORT)" --out "$(ICONSET_DIR)/icon_16x16.png"; \
+		sips -z 32 32 "$(ICON_EXPORT)" --out "$(ICONSET_DIR)/icon_16x16@2x.png"; \
+		sips -z 32 32 "$(ICON_EXPORT)" --out "$(ICONSET_DIR)/icon_32x32.png"; \
+		sips -z 64 64 "$(ICON_EXPORT)" --out "$(ICONSET_DIR)/icon_32x32@2x.png"; \
+		sips -z 128 128 "$(ICON_EXPORT)" --out "$(ICONSET_DIR)/icon_128x128.png"; \
+		sips -z 256 256 "$(ICON_EXPORT)" --out "$(ICONSET_DIR)/icon_128x128@2x.png"; \
+		sips -z 256 256 "$(ICON_EXPORT)" --out "$(ICONSET_DIR)/icon_256x256.png"; \
+		sips -z 512 512 "$(ICON_EXPORT)" --out "$(ICONSET_DIR)/icon_256x256@2x.png"; \
+		sips -z 512 512 "$(ICON_EXPORT)" --out "$(ICONSET_DIR)/icon_512x512.png"; \
+		sips -z 1024 1024 "$(ICON_EXPORT)" --out "$(ICONSET_DIR)/icon_512x512@2x.png"; \
+		iconutil -c icns "$(ICONSET_DIR)" -o "$(RESOURCES_DIR)/$(ICON_FILE)"; \
+	fi
 	/usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName $(APP_DISPLAY_NAME)" "$(CONTENTS_DIR)/Info.plist"
 	/usr/libexec/PlistBuddy -c "Set :CFBundleIconFile $(ICON_FILE)" "$(CONTENTS_DIR)/Info.plist"
 	/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $(BUNDLE_IDENTIFIER)" "$(CONTENTS_DIR)/Info.plist"

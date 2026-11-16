@@ -132,76 +132,36 @@ struct DashboardClient: DashboardServing {
         var lineBuffer: [UInt8] = []
         var previousWasCarriageReturn = false
 
-        for try await byte in bytes {
-            if Task.isCancelled {
-                throw CancellationError()
+        func handleLine() async throws {
+            let line = String(decoding: lineBuffer, as: UTF8.self)
+            lineBuffer.removeAll(keepingCapacity: true)
+
+            if line.isEmpty {
+                try await handleEvent(name: eventName, dataLines: dataLines, onLog: onLog, onSample: onSample)
+                eventName = ""
+                dataLines.removeAll(keepingCapacity: true)
+                return
             }
+            if line.hasPrefix(":") { return }
 
+            let (field, value) = parseSSEField(line)
+            switch field {
+            case "event": eventName = value
+            case "data": dataLines.append(value)
+            default: break
+            }
+        }
+
+        for try await byte in bytes {
+            if Task.isCancelled { throw CancellationError() }
             if byte == 0x0D {
-                let line = decodeSSELine(from: lineBuffer)
-                lineBuffer.removeAll(keepingCapacity: true)
+                try await handleLine()
                 previousWasCarriageReturn = true
-
-                if line.isEmpty {
-                    try await handleEvent(
-                        name: eventName,
-                        dataLines: dataLines,
-                        onLog: onLog,
-                        onSample: onSample
-                    )
-                    eventName = ""
-                    dataLines.removeAll(keepingCapacity: true)
-                    continue
-                }
-
-                if line.hasPrefix(":") {
-                    continue
-                }
-
-                let (field, value) = parseSSEField(line)
-
-                switch field {
-                case "event":
-                    eventName = value
-                case "data":
-                    dataLines.append(value)
-                default:
-                    break
-                }
             } else if byte == 0x0A {
                 if previousWasCarriageReturn {
                     previousWasCarriageReturn = false
-                    continue
-                }
-
-                let line = decodeSSELine(from: lineBuffer)
-                lineBuffer.removeAll(keepingCapacity: true)
-
-                if line.isEmpty {
-                    try await handleEvent(
-                        name: eventName,
-                        dataLines: dataLines,
-                        onLog: onLog,
-                        onSample: onSample
-                    )
-                    eventName = ""
-                    dataLines.removeAll(keepingCapacity: true)
-                    continue
-                }
-
-                if line.hasPrefix(":") {
-                    continue
-                }
-
-                let (field, value) = parseSSEField(line)
-
-                switch field {
-                case "event":
-                    eventName = value
-                case "data":
-                    dataLines.append(value)
-                default:
-                    break
+                } else {
+                    try await handleLine()
                 }
             } else {
                 previousWasCarriageReturn = false
@@ -224,9 +184,11 @@ struct DashboardClient: DashboardServing {
 
         switch name {
         case "gpu_telemetry":
-            onLog("Received gpu_telemetry event.")
-            let sample = try TelemetryParser.firstSample(from: data)
-            await onSample(sample)
+            do {
+                await onSample(try TelemetryParser.firstSample(from: data))
+            } catch let error as DashboardError {
+                onLog("Skipped telemetry event: \(error.localizedDescription)")
+            }
 
         case "error":
             onLog("Received error event from telemetry stream.")
@@ -245,16 +207,6 @@ struct DashboardClient: DashboardServing {
 
     private func endpoint(_ path: String) -> URL {
         URL(string: path, relativeTo: baseURL)!.absoluteURL
-    }
-
-    private func decodeSSELine(from bytes: [UInt8]) -> String {
-        var bytes = bytes
-
-        if bytes.last == 0x0D {
-            bytes.removeLast()
-        }
-
-        return String(decoding: bytes, as: UTF8.self)
     }
 
     private func parseSSEField(_ line: String) -> (field: String, value: String) {

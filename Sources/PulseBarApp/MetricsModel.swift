@@ -1,14 +1,11 @@
 import AppKit
 import Foundation
 import OSLog
-import PulseBarUI
 import SwiftUI
 
-private var dashboardBaseURL: URL { DashboardEndpoint.current.url }
-private var dashboardLocalEndpoint: String { DashboardEndpoint.current.address }
-private var manualSSHTunnelCommand: String { DashboardEndpoint.current.tunnelCommand }
 private let updateAvailabilityPollInterval: Duration = .seconds(3_600)
 private let updateAvailabilityRetryInterval: Duration = .seconds(30)
+private let maximumTelemetryFailures = 5
 
 @MainActor
 final class MetricsViewModel: ObservableObject {
@@ -17,7 +14,6 @@ final class MetricsViewModel: ObservableObject {
     @Published private(set) var snapshot: MetricsSnapshot {
         didSet { if snapshot.gpu.utilizationPercent == nil { history.markGap() } }
     }
-    @Published private(set) var debugMessages: [String] = []
     @Published private(set) var isUpdateAvailable = false
     @Published private(set) var endpoint = DashboardEndpoint.current
     @Published var username: String
@@ -28,6 +24,8 @@ final class MetricsViewModel: ObservableObject {
 
     private var dashboard: any DashboardServing
     private let syncAppMonitor: NVIDIASyncAppMonitor
+    private let retrySleep: @Sendable (Duration) async throws -> Void
+    private let reconnectPauseStore: DashboardReconnectPauseStore
     private var sessionStore: any DashboardSessionStoring
     private let logger = Logger(subsystem: "PulseBar", category: "Dashboard")
     private var healthTask: Task<Void, Never>?
@@ -53,9 +51,12 @@ final class MetricsViewModel: ObservableObject {
         syncAppMonitor: NVIDIASyncAppMonitor = .live,
         dashboard: (any DashboardServing)? = nil,
         sessionStore: (any DashboardSessionStoring)? = nil,
-        demo: Bool = false
+        demo: Bool = false,
+        endpoint: DashboardEndpoint? = nil,
+        reconnectPauseStore: DashboardReconnectPauseStore = DashboardReconnectPauseStore(),
+        retrySleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
     ) {
-        let endpoint = DashboardEndpoint.current
+        let endpoint = endpoint ?? DashboardEndpoint.current
         let dashboard = dashboard ?? DashboardClient(baseURL: endpoint.url)
         let sessionStore = sessionStore ?? DashboardSessionStore(endpoint: endpoint)
         let username = demo ? "Demo" : sessionStore.loadUsername()
@@ -67,6 +68,8 @@ final class MetricsViewModel: ObservableObject {
 
         self.dashboard = dashboard
         self.syncAppMonitor = syncAppMonitor
+        self.retrySleep = retrySleep
+        self.reconnectPauseStore = reconnectPauseStore
         self.sessionStore = sessionStore
         self.authToken = authToken
         self.sessionLoadError = loadError
@@ -87,10 +90,8 @@ final class MetricsViewModel: ObservableObject {
             return
         }
         if let authToken {
-            connectionHealth.beginConnection()
             log("Loaded saved dashboard session for '\(username)'.")
-            startStream(using: authToken)
-            startUpdateAvailabilityChecks(using: authToken)
+            startSessionPollingIfAllowed(using: authToken)
         } else {
             log("No saved dashboard session found.")
         }
@@ -108,7 +109,8 @@ final class MetricsViewModel: ObservableObject {
         wakeTask = Task { [weak self] in
             for await _ in NSWorkspace.shared.notificationCenter.notifications(named: NSWorkspace.didWakeNotification) {
                 guard !Task.isCancelled else { return }
-                self?.refresh()
+                guard let self, self.connectionHealth.state != .paused else { continue }
+                self.reconnect(resetFailures: false)
             }
         }
     }
@@ -116,6 +118,7 @@ final class MetricsViewModel: ObservableObject {
     func checkFreshness(at date: Date) {
         guard let authToken, connectionHealth.markStale(at: date) else { return }
         snapshot = snapshot.replacingTelemetryUnavailable(note: "Telemetry is stale. Reconnecting…", statusText: "Stale", timestamp: date)
+        guard recordStreamFailure() else { return }
         startStream(using: authToken)
     }
 
@@ -144,12 +147,22 @@ final class MetricsViewModel: ObservableObject {
     }
 
     func refresh() {
+        reconnect(resetFailures: true)
+    }
+
+    private func reconnect(resetFailures: Bool) {
         guard let authToken else {
             snapshot = .signedOut(note: "Sign in to the local dashboard to stream metrics.")
             return
         }
 
-        retryFailures = 0
+        if resetFailures {
+            retryFailures = 0
+            reconnectPauseStore.setPaused(false, for: endpoint)
+        } else if reconnectPauseStore.isPaused(for: endpoint) {
+            showPausedState()
+            return
+        }
         connectionHealth.reconnecting()
         snapshot = snapshot.replacingTelemetryUnavailable(
             note: "Reconnecting to the local dashboard…",
@@ -170,6 +183,7 @@ final class MetricsViewModel: ObservableObject {
         }
 
         let authenticationID = UUID()
+        retryFailures = 0
         activeAuthenticationID = authenticationID
         connectionHealth.beginConnection()
         isAuthenticating = true
@@ -204,8 +218,7 @@ final class MetricsViewModel: ObservableObject {
                 self.authToken = token
                 self.snapshot = .connecting(username: trimmedUsername)
                 self.log("Login succeeded. Saved token to Keychain.")
-                self.startStream(using: token)
-                self.startUpdateAvailabilityChecks(using: token)
+                self.startSessionPollingIfAllowed(using: token)
             } catch {
                 guard self.activeAuthenticationID == authenticationID else { return }
                 let message = error is CancellationError ? "Sign-in cancelled." : self.dashboardConnectionFailureMessage(for: error)
@@ -238,6 +251,7 @@ final class MetricsViewModel: ObservableObject {
         activeTelemetryStreamID = nil
         activeUpdateAvailabilityTaskID = nil
         authToken = nil
+        retryFailures = 0
         username = ""
         password = ""
         isUpdateAvailable = false
@@ -268,9 +282,7 @@ final class MetricsViewModel: ObservableObject {
         connectionHealth = TelemetryConnectionHealth()
         snapshot = authToken == nil ? .signedOut() : .connecting(username: username)
         if let authToken {
-            connectionHealth.beginConnection()
-            startStream(using: authToken)
-            startUpdateAvailabilityChecks(using: authToken)
+            startSessionPollingIfAllowed(using: authToken)
         }
     }
 
@@ -297,10 +309,9 @@ final class MetricsViewModel: ObservableObject {
             sessionLoadError = nil
             username = sessionStore.loadUsername()
             authToken = token
-            connectionHealth.beginConnection()
+            retryFailures = 0
             snapshot = .connecting(username: username)
-            startStream(using: token)
-            startUpdateAvailabilityChecks(using: token)
+            startSessionPollingIfAllowed(using: token)
         } catch {
             sessionLoadError = error.userFacingMessage
         }
@@ -308,6 +319,44 @@ final class MetricsViewModel: ObservableObject {
 
     func quit() {
         NSApplication.shared.terminate(nil)
+    }
+
+    private func startSessionPollingIfAllowed(using token: String) {
+        guard !reconnectPauseStore.isPaused(for: endpoint) else {
+            showPausedState()
+            return
+        }
+        connectionHealth.beginConnection()
+        startStream(using: token)
+        startUpdateAvailabilityChecks(using: token)
+    }
+
+    private func showPausedState() {
+        connectionHealth.pause()
+        snapshot = snapshot.replacingTelemetryUnavailable(
+            note: "Automatic reconnection paused after repeated failures. Choose Reconnect from the actions menu to try again.",
+            statusText: "Reconnection paused",
+            timestamp: .now
+        )
+    }
+
+    // Stop all authenticated polling once telemetry has failed repeatedly. A fresh
+    // sample or an explicit reconnect starts a new failure streak.
+    private func recordStreamFailure() -> Bool {
+        retryFailures += 1
+        guard retryFailures >= maximumTelemetryFailures else { return true }
+
+        reconnectPauseStore.setPaused(true, for: endpoint)
+        activeTelemetryStreamID = nil
+        activeUpdateAvailabilityTaskID = nil
+        streamTask?.cancel()
+        updateAvailabilityTask?.cancel()
+        streamTask = nil
+        updateAvailabilityTask = nil
+        isUpdateAvailable = false
+        showPausedState()
+        log("Automatic reconnection paused after repeated telemetry failures.")
+        return false
     }
 
     private func startStream(using token: String) {
@@ -352,11 +401,6 @@ final class MetricsViewModel: ObservableObject {
 
                             guard TelemetryHistory.accepts(sample) else { return }
                             self.history.append(sample, at: .now)
-                            let usedGiB = max((sample.memoryTotalMB - sample.memoryAvailableMB) / 1024, 0)
-                            let totalGiB = max(sample.memoryTotalMB / 1024, 0).rounded(.up)
-                            self.log(
-                                "Received telemetry sample: GPU \(Int(sample.gpuUtilizationPercent.rounded()))%, memory \(MetricNumberFormat.usedMemoryGiBString(usedGiB)) / \(MetricNumberFormat.wholeNumberString(totalGiB)) GB."
-                            )
                             self.retryFailures = 0
                             self.connectionHealth.sampleReceived(at: .now)
                             self.snapshot = .live(sample)
@@ -378,8 +422,8 @@ final class MetricsViewModel: ObservableObject {
                             )
                         }
 
-                        retryFailures += 1
-                        try? await Task.sleep(for: TelemetryConnectionHealth.retryDelay(failures: retryFailures))
+                        guard !Task.isCancelled, isActiveTelemetryStream(id: streamID, token: token), recordStreamFailure() else { return }
+                        try? await retrySleep(TelemetryConnectionHealth.retryDelay(failures: retryFailures))
                     }
                 } catch is CancellationError {
                     await MainActor.run {
@@ -389,6 +433,8 @@ final class MetricsViewModel: ObservableObject {
 
                         self.log("Telemetry stream task cancelled.")
                     }
+                    return
+                } catch let error as URLError where error.code == .cancelled {
                     return
                 } catch DashboardError.unauthorized {
                     await MainActor.run {
@@ -400,6 +446,7 @@ final class MetricsViewModel: ObservableObject {
                     }
                     return
                 } catch {
+                    guard !Task.isCancelled else { return }
                     await MainActor.run {
                         guard self.isActiveTelemetryStream(id: streamID, token: token) else {
                             return
@@ -414,8 +461,8 @@ final class MetricsViewModel: ObservableObject {
                         )
                     }
 
-                    retryFailures += 1
-                    try? await Task.sleep(for: TelemetryConnectionHealth.retryDelay(failures: retryFailures))
+                    guard !Task.isCancelled, isActiveTelemetryStream(id: streamID, token: token), recordStreamFailure() else { return }
+                    try? await retrySleep(TelemetryConnectionHealth.retryDelay(failures: retryFailures))
                 }
             }
         }
@@ -532,614 +579,6 @@ final class MetricsViewModel: ObservableObject {
     private func log(_ message: String) {
         let line = "[\(Date().formatted(date: .omitted, time: .standard))] \(message)"
         logger.debug("\(line, privacy: .private)")
-        debugMessages.append(line)
 
-        if debugMessages.count > 8 {
-            debugMessages.removeFirst(debugMessages.count - 8)
-        }
-    }
-}
-
-@MainActor
-struct MetricsMenuView: View {
-    @ObservedObject var viewModel: MetricsViewModel
-    @ObservedObject private var sparkle = SparkleController.shared
-    var menuState: MetricsMenuState {
-        MetricsMenuState(viewModel: viewModel)
-    }
-
-    var body: some View {
-        let menuState = self.menuState
-        Group {
-            Section {
-                Label(menuState.connectionHealth.state.rawValue, systemImage: "network")
-                if let date = menuState.connectionHealth.lastSampleAt {
-                    Text("Last sample: \(date.formatted(date: .omitted, time: .standard))")
-                }
-                if menuState.isSignedIn { Button("Reconnect") { viewModel.refresh() } }
-            }
-            Section {
-                MetricMenuRow(
-                    systemImage: "memorychip",
-                    title: "RAM",
-                    value: menuState.snapshot.memory.menuDetailText
-                )
-                MetricMenuRow(
-                    systemImage: "cpu.fill",
-                    title: "GPU",
-                    value: menuState.snapshot.gpu.menuDetailText
-                )
-            }
-
-            if let note = menuState.snapshot.gpu.note {
-                Section {
-                    Text(note)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            if !menuState.isSignedIn {
-                Section {
-                    Text("Sign in from Preferences to connect to the local dashboard.")
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            Section {
-                Button {
-                    PulseBarNavigation.openPreferences(viewModel: viewModel)
-                } label: {
-                    Label("Preferences…", systemImage: "gearshape")
-                }
-                .keyboardShortcut(",", modifiers: .command)
-
-                Button {
-                    PulseBarNavigation.openDashboard()
-                } label: {
-                    Label("Open Dashboard", systemImage: "safari")
-                }
-
-                if sparkle.canCheckForUpdates {
-                    Button {
-                        sparkle.checkForUpdates()
-                    } label: {
-                        Label(
-                            sparkle.isUpdateReady ? "Update ready, restart now?" : "Check for Updates…",
-                            systemImage: "arrow.down.circle"
-                        )
-                    }
-                }
-
-                if menuState.isUpdateAvailable {
-                    Label("System update available", systemImage: "exclamationmark.arrow.triangle.2.circlepath")
-                }
-            }
-
-            Section {
-                Button {
-                    viewModel.quit()
-                } label: {
-                    Label("Quit", systemImage: "power")
-                }
-                .keyboardShortcut("q", modifiers: .command)
-            }
-        }
-    }
-}
-
-@MainActor
-struct MetricsMenuState {
-    let connectionHealth: TelemetryConnectionHealth
-    let snapshot: MetricsSnapshot
-    let isSignedIn: Bool
-    let isUpdateAvailable: Bool
-
-    init(viewModel: MetricsViewModel) {
-        connectionHealth = viewModel.connectionHealth
-        snapshot = viewModel.snapshot
-        isSignedIn = viewModel.isSignedIn
-        isUpdateAvailable = viewModel.isUpdateAvailable
-    }
-}
-
-private struct MetricMenuRow: View {
-    let systemImage: String
-    let title: String
-    let value: String
-
-    var body: some View {
-        Label("\(title): \(value)", systemImage: systemImage)
-            .monospacedDigit()
-    }
-}
-
-struct MetricsSnapshot {
-    let memory: MemorySnapshot
-    let gpu: GPUSnapshot
-    let timestamp: Date
-
-    var menuBarTitle: String {
-        "RAM \(memory.percentText) GPU \(gpu.menuBarText)"
-    }
-
-    static func signedOut(note: String? = nil) -> MetricsSnapshot {
-        MetricsSnapshot(
-            memory: MemorySnapshot(statusText: "Unavailable"),
-            gpu: GPUSnapshot(
-                deviceName: "GPU",
-                utilizationPercent: nil,
-                statusText: "Unavailable",
-                note: note
-            ),
-            timestamp: .now
-        )
-    }
-
-    static func connecting(username: String) -> MetricsSnapshot {
-        let prefix = username.isEmpty ? "Connecting to local dashboard…" : "Connecting to local dashboard as \(username)…"
-
-        return MetricsSnapshot(
-            memory: MemorySnapshot(statusText: "Connecting…"),
-            gpu: GPUSnapshot(
-                deviceName: "GPU",
-                utilizationPercent: nil,
-                statusText: "Connecting…",
-                note: prefix
-            ),
-            timestamp: .now
-        )
-    }
-
-    static func live(_ sample: TelemetrySample) -> MetricsSnapshot {
-        let usedGiB = max((sample.memoryTotalMB - sample.memoryAvailableMB) / 1024, 0)
-        let actualTotalGiB = max(sample.memoryTotalMB / 1024, 0)
-        let totalGiB = actualTotalGiB.rounded(.up)
-        let percentUsed = actualTotalGiB > 0 ? (usedGiB / actualTotalGiB) * 100 : 0
-
-        return MetricsSnapshot(
-            memory: MemorySnapshot(
-                usedGiB: usedGiB,
-                totalGiB: totalGiB,
-                percentUsed: percentUsed,
-                statusText: nil
-            ),
-            gpu: GPUSnapshot(
-                deviceName: "GPU",
-                utilizationPercent: sample.gpuUtilizationPercent,
-                statusText: nil,
-                note: nil
-            ),
-            timestamp: .now
-        )
-    }
-
-    func replacingTelemetryUnavailable(note: String?, statusText: String, timestamp: Date) -> MetricsSnapshot {
-        MetricsSnapshot(
-            memory: MemorySnapshot(statusText: statusText),
-            gpu: GPUSnapshot(
-                deviceName: gpu.deviceName,
-                utilizationPercent: nil,
-                statusText: statusText,
-                note: note
-            ),
-            timestamp: timestamp
-        )
-    }
-}
-
-struct MemorySnapshot {
-    let usedGiB: Double?
-    let totalGiB: Double?
-    let percentUsed: Double?
-    let statusText: String?
-
-    init(
-        usedGiB: Double? = nil,
-        totalGiB: Double? = nil,
-        percentUsed: Double? = nil,
-        statusText: String? = nil
-    ) {
-        self.usedGiB = usedGiB
-        self.totalGiB = totalGiB
-        self.percentUsed = percentUsed
-        self.statusText = statusText
-    }
-
-    var percentText: String {
-        guard let percentUsed else {
-            return "--"
-        }
-
-        return "\(Int(percentUsed.rounded()))%"
-    }
-
-    var detailText: String {
-        guard let usedGiB, let totalGiB else {
-            return statusText ?? "Unavailable"
-        }
-
-        let usedText = MetricNumberFormat.usedMemoryGiBString(usedGiB)
-        let totalText = MetricNumberFormat.wholeNumberString(totalGiB)
-        return "\(percentText) (\(usedText) / \(totalText) GB)"
-    }
-
-    var menuDetailText: String {
-        guard usedGiB != nil, totalGiB != nil else {
-            return "--"
-        }
-
-        return detailText
-    }
-}
-
-struct GPUSnapshot {
-    let deviceName: String?
-    let utilizationPercent: Double?
-    let statusText: String?
-    let note: String?
-
-    var menuBarText: String {
-        guard let utilizationPercent else {
-            return "--"
-        }
-
-        return "\(Int(utilizationPercent.rounded()))%"
-    }
-
-    var detailText: String {
-        guard let utilizationPercent else {
-            return statusText ?? "Unavailable"
-        }
-
-        return "\(Int(utilizationPercent.rounded()))%"
-    }
-
-    var menuDetailText: String {
-        guard utilizationPercent != nil else {
-            return "--"
-        }
-
-        return detailText
-    }
-
-    var summaryText: String {
-        guard let utilizationPercent else {
-            return deviceName ?? "Unavailable"
-        }
-
-        if let deviceName, !deviceName.isEmpty {
-            return "\(deviceName) \(Int(utilizationPercent.rounded()))%"
-        }
-
-        return "\(Int(utilizationPercent.rounded()))%"
-    }
-}
-
-private struct TelemetryPayload: Decodable {
-    let telemetryForGPUs: [TelemetrySample]
-
-    private enum CodingKeys: String, CodingKey {
-        case telemetryForGPUs = "TelemetryForGPUs"
-    }
-}
-
-struct TelemetrySample: Decodable, Sendable {
-    let gpuUtilizationPercent: Double
-    let memoryTotalMB: Double
-    let memoryAvailableMB: Double
-
-    private enum CodingKeys: String, CodingKey {
-        case gpuUtilizationPercent = "percentage_utilization"
-        case memoryTotalMB = "memory_total_in_mb"
-        case memoryAvailableMB = "memory_available_in_mb"
-        case memoryTotalKiB = "memory_total_in_kib"
-        case memoryAvailableKiB = "memory_available_in_kib"
-    }
-}
-
-extension TelemetrySample {
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        gpuUtilizationPercent = try container.decode(Double.self, forKey: .gpuUtilizationPercent)
-        // Current dashboards report KiB; normalize to the units used by existing views.
-        // Require a complete pair so mixed payloads cannot silently combine different units.
-        if container.contains(.memoryTotalKiB) || container.contains(.memoryAvailableKiB) {
-            memoryTotalMB = try container.decode(Double.self, forKey: .memoryTotalKiB) / 1024
-            memoryAvailableMB = try container.decode(Double.self, forKey: .memoryAvailableKiB) / 1024
-        } else {
-            memoryTotalMB = try container.decode(Double.self, forKey: .memoryTotalMB)
-            memoryAvailableMB = try container.decode(Double.self, forKey: .memoryAvailableMB)
-        }
-    }
-}
-
-enum TelemetryParser {
-    static func firstSample(from data: Data) throws -> TelemetrySample {
-        let payload: TelemetryPayload
-        do {
-            payload = try JSONDecoder().decode(TelemetryPayload.self, from: data)
-        } catch DecodingError.keyNotFound(let key, _) {
-            throw DashboardError.server("Dashboard telemetry is missing '\(key.stringValue)'.")
-        } catch DecodingError.typeMismatch(_, let context), DecodingError.valueNotFound(_, let context) {
-            let field = context.codingPath.last?.stringValue ?? "payload"
-            throw DashboardError.server("Dashboard telemetry has an invalid value for '\(field)'.")
-        } catch DecodingError.dataCorrupted {
-            throw DashboardError.server("Dashboard telemetry contains invalid JSON or numeric data.")
-        }
-        guard let sample = payload.telemetryForGPUs.first else {
-            throw DashboardError.missingTelemetry
-        }
-
-        guard sample.gpuUtilizationPercent.isFinite, (0...100).contains(sample.gpuUtilizationPercent),
-            sample.memoryTotalMB.isFinite, sample.memoryTotalMB > 0,
-            sample.memoryAvailableMB.isFinite, (0...sample.memoryTotalMB).contains(sample.memoryAvailableMB)
-        else { throw DashboardError.server("The dashboard returned invalid telemetry.") }
-        return sample
-    }
-}
-
-enum NVIDIASyncAppState: Equatable, Sendable {
-    case running
-    case notRunning
-}
-
-struct NVIDIASyncAppMonitor: Sendable {
-    let currentState: @MainActor @Sendable () -> NVIDIASyncAppState
-
-    static let live = NVIDIASyncAppMonitor {
-        NSWorkspace.shared.runningApplications.contains { app in
-            matches(
-                bundleIdentifier: app.bundleIdentifier,
-                localizedName: app.localizedName,
-                bundleName: app.bundleURL?.deletingPathExtension().lastPathComponent
-            )
-        } ? .running : .notRunning
-    }
-
-    static func matches(bundleIdentifier: String?, localizedName: String?, bundleName: String?) -> Bool {
-        [bundleIdentifier, localizedName, bundleName]
-            .compactMap(normalizedIdentifier)
-            .contains { identifier in
-                identifier == "nvidiasync"
-                    || identifier == "nvidiasyncapp"
-                    || identifier.contains("nvidiasync")
-            }
-    }
-
-    private static func normalizedIdentifier(_ value: String?) -> String? {
-        value?
-            .lowercased()
-            .replacingOccurrences(of: " ", with: "")
-            .replacingOccurrences(of: "-", with: "")
-            .replacingOccurrences(of: "_", with: "")
-            .replacingOccurrences(of: ".", with: "")
-    }
-}
-
-enum DashboardConnectionMessage {
-    static func message(for error: Error, syncAppState: NVIDIASyncAppState, endpoint: DashboardEndpoint = .standard) -> String {
-        guard error.isLocalDashboardConnectivityError else {
-            return error.userFacingMessage
-        }
-
-        switch syncAppState {
-        case .running:
-            return "NVIDIA Sync is running. Open DGX Dashboard, or keep a manual SSH tunnel forwarding \(endpoint.address)."
-        case .notRunning:
-            return "Expose DGX Dashboard at \(endpoint.address) with NVIDIA Sync or a manual SSH tunnel: \(endpoint.tunnelCommand)"
-        }
-    }
-}
-
-enum DashboardError: LocalizedError {
-    case invalidResponse
-    case unauthorized
-    case loginFailed
-    case missingTelemetry
-    case server(String)
-
-    var errorDescription: String? {
-        switch self {
-        case .invalidResponse:
-            return "The dashboard returned an unexpected response."
-        case .unauthorized:
-            return "The dashboard rejected the current session."
-        case .loginFailed:
-            return "Login failed. Check your dashboard credentials."
-        case .missingTelemetry:
-            return "The telemetry stream did not include GPU data."
-        case .server(let message):
-            return message
-        }
-    }
-}
-
-enum MetricNumberFormat {
-    static func usedMemoryGiBString(_ value: Double, locale: Locale = .autoupdatingCurrent) -> String {
-        decimalString(value, fractionDigits: 2, locale: locale)
-    }
-
-    static func wholeNumberString(_ value: Double, locale: Locale = .autoupdatingCurrent) -> String {
-        decimalString(value, fractionDigits: 0, locale: locale)
-    }
-
-    private static func decimalString(_ value: Double, fractionDigits: Int, locale: Locale) -> String {
-        let formatter = NumberFormatter()
-        formatter.locale = locale
-        formatter.numberStyle = .decimal
-        formatter.minimumFractionDigits = fractionDigits
-        formatter.maximumFractionDigits = fractionDigits
-        formatter.usesGroupingSeparator = false
-
-        return formatter.string(from: NSNumber(value: value)) ?? String(value)
-    }
-}
-
-extension StringProtocol {
-    fileprivate var trimmed: String {
-        String(self).trimmingCharacters(in: .whitespaces)
-    }
-}
-
-extension Error {
-    fileprivate var userFacingMessage: String {
-        if let localizedError = self as? LocalizedError,
-            let description = localizedError.errorDescription
-        {
-            return description
-        }
-
-        return localizedDescription
-    }
-
-    fileprivate var isLocalDashboardConnectivityError: Bool {
-        guard let urlError = self as? URLError else {
-            return false
-        }
-
-        switch urlError.code {
-        case .cannotConnectToHost,
-            .cannotFindHost,
-            .dnsLookupFailed,
-            .networkConnectionLost,
-            .notConnectedToInternet,
-            .timedOut:
-            return true
-        default:
-            return false
-        }
-    }
-}
-
-struct PulseBarPreferencesView: View {
-    @ObservedObject var viewModel: MetricsViewModel
-    var onContentSizeChange: @MainActor @Sendable (CGSize) -> Void = { _ in }
-    @State private var portText = String(DashboardEndpoint.current.port)
-    @State private var feedback: PreferencesFeedback?
-    @State private var checking = false
-
-    var body: some View {
-        DashboardPreferencesContent(
-            port: $portText, username: $viewModel.username, password: $viewModel.password,
-            state: presentation, actions: actions, additionalCardsFirst: true,
-            onContentSizeChange: onContentSizeChange
-        ) {
-            WelcomePreferencesView()
-            LoginItemPreferencesView()
-            MenuBarPreferencesView()
-        }
-    }
-
-    private var presentation: DashboardPreferencesState {
-        var state = DashboardPreferencesState(
-            endpointAddress: viewModel.endpoint.address,
-            accountName: viewModel.isSignedIn ? (viewModel.username.isEmpty ? "dashboard" : viewModel.username) : nil
-        )
-        state.connectionTitle = viewModel.connectionHealth.state.rawValue
-        switch viewModel.connectionHealth.state {
-        case .live: state.connectionTone = .success
-        case .stale, .reconnecting, .expired: state.connectionTone = .warning
-        default: state.connectionTone = .neutral
-        }
-        state.isAuthenticating = viewModel.isAuthenticating
-        state.isChecking = checking
-        state.canApplyPort = (try? DashboardEndpoint.parse(portText)) != viewModel.endpoint && viewModel.sessionRemovalError == nil
-        state.canTestConnection = !state.canApplyPort
-        state.canSignIn = viewModel.canSignIn
-        state.feedback = feedback
-        state.accountNote = viewModel.sessionRemovalError ?? viewModel.sessionLoadError ?? viewModel.snapshot.gpu.note
-        state.canRetrySessionRemoval = !viewModel.isSignedIn && viewModel.sessionRemovalError != nil
-        state.canRetrySessionLoad = !viewModel.isSignedIn && viewModel.sessionLoadError != nil && viewModel.sessionRemovalError == nil
-        return state
-    }
-
-    private var actions: DashboardPreferencesActions {
-        var actions = DashboardPreferencesActions()
-        actions.applyPort = {
-            do {
-                let endpoint = try DashboardEndpoint.parse(portText)
-                viewModel.configureEndpoint(endpoint)
-                portText = String(endpoint.port)
-                feedback = nil
-            } catch { feedback = PreferencesFeedback(error.userFacingMessage, tone: .error) }
-        }
-        actions.testConnection = {
-            checking = true
-            Task {
-                feedback = PreferencesFeedback(await viewModel.testConnection())
-                checking = false
-            }
-        }
-        actions.openSync = {
-            feedback =
-                DashboardSetupActions.openSync()
-                ? PreferencesFeedback("Opened NVIDIA Sync.")
-                : PreferencesFeedback("NVIDIA Sync was not found in Applications.", tone: .error)
-        }
-        actions.copyTunnel = {
-            DashboardSetupActions.copyTunnel(viewModel.endpoint)
-            feedback = PreferencesFeedback("SSH tunnel command copied.", tone: .success)
-        }
-        actions.signIn = { _ = viewModel.signIn() }
-        actions.signOut = { viewModel.signOut() }
-        actions.retrySessionLoad = { viewModel.retrySavedSession() }
-        return actions
-    }
-}
-
-@MainActor
-enum PulseBarNavigation {
-    private static var preferencesWindow: NSWindow?
-    private static var preferencesSizing: PreferencesWindowSizing?
-
-    static func openPreferences(viewModel: MetricsViewModel) {
-        if NSApplication.shared.activationPolicy() == .prohibited {
-            NSApplication.shared.setActivationPolicy(.accessory)
-        }
-
-        if preferencesWindow == nil {
-            let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 520, height: 660),
-                styleMask: [.titled, .closable, .miniaturizable, .resizable],
-                backing: .buffered,
-                defer: false
-            )
-            window.isReleasedWhenClosed = false
-            if let screen = NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) ?? NSScreen.main {
-                let bounds = screen.visibleFrame
-                window.setFrameOrigin(NSPoint(x: bounds.midX - window.frame.width / 2, y: bounds.midY - window.frame.height / 2))
-            }
-            let sizing = PreferencesWindowSizing(window: window)
-            let hostingController = NSHostingController(
-                rootView: PulseBarPreferencesView(
-                    viewModel: viewModel, onContentSizeChange: { [weak sizing] size in sizing?.contentSizeDidChange(size) }
-                )
-            )
-            hostingController.sizingOptions = []
-            window.contentViewController = hostingController
-            window.standardWindowButton(.zoomButton)?.isEnabled = false
-
-            preferencesSizing = sizing
-            preferencesWindow = window
-        } else if let window = preferencesWindow,
-            let hostingController = window.contentViewController as? NSHostingController<PulseBarPreferencesView>
-        {
-            hostingController.rootView = PulseBarPreferencesView(
-                viewModel: viewModel, onContentSizeChange: { size in preferencesSizing?.contentSizeDidChange(size) })
-        }
-
-        preferencesWindow?.title = "PulseBar Preferences"
-        preferencesWindow?.titleVisibility = .visible
-        preferencesWindow?.titlebarAppearsTransparent = false
-        preferencesWindow?.contentView?.layoutSubtreeIfNeeded()
-        preferencesSizing?.fitContent()
-        preferencesWindow?.makeKeyAndOrderFront(nil)
-        NSApplication.shared.activate(ignoringOtherApps: true)
-        preferencesWindow?.orderFrontRegardless()
-        preferencesWindow?.makeKey()
-    }
-
-    static func openDashboard() {
-        NSWorkspace.shared.open(dashboardBaseURL)
     }
 }

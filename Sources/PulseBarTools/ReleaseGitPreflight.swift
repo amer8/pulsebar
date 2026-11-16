@@ -1,6 +1,14 @@
 import Foundation
 
 enum ReleaseGitPreflight {
+    static func validateTag(_ tag: String, root: URL) throws {
+        let ref = "refs/tags/\(tag)"
+        let local = try Command.capture("git", ["tag", "--list", tag], cwd: root)
+        guard local.isEmpty else { throw ToolError("local tag already exists: \(tag)") }
+        let remote = try Command.capture("git", ["ls-remote", "--tags", "origin", ref], cwd: root)
+        guard remote.isEmpty else { throw ToolError("remote tag already exists: \(tag)") }
+    }
+
     static func validate(root: URL) throws {
         let branch = try Command.capture("git", ["branch", "--show-current"], cwd: root)
             .trimmingCharacters(in: .whitespacesAndNewlines)

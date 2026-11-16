@@ -93,7 +93,7 @@ Before releasing changes to authentication or the updater, manually verify these
 - Sign in to a real Spark dashboard, restart PulseBar, and confirm the saved session resumes.
 - Check reconnect behavior after sleep, network loss, and tunnel restart during an extended run.
 - Measure idle CPU and energy use, and check keyboard navigation and VoiceOver in Preferences and the telemetry panel.
-- Run the signed app on the oldest supported macOS version and on Intel, then exercise an actual signed Sparkle update.
+- Run the signed app on the oldest supported macOS version, then exercise an actual signed Sparkle update.
 
 ## Telemetry Contract
 

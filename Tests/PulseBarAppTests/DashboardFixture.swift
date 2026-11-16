@@ -5,6 +5,9 @@ import Network
 final class DashboardFixture: @unchecked Sendable {
     enum Scenario: String {
         case live
+        case malformedThenLive
+        case carriageReturnOnly
+        case carriageReturnLineFeed
         case heartbeatOnly = "heartbeat-only"
         case unauthorized
         case loginError = "login-error"
@@ -188,7 +191,14 @@ final class DashboardFixture: @unchecked Sendable {
         } else {
             let payload =
                 "{\"TelemetryForGPUs\":[{\"percentage_utilization\":37,\"memory_total_in_kib\":134217728,\"memory_available_in_kib\":67108864}]}"
-            event = "event: gpu_telemetry\ndata: \(payload)\n\n"
+            let malformed = scenario == .malformedThenLive ? "event: gpu_telemetry\ndata: {bad json}\n\n" : ""
+            let newline: String
+            switch scenario {
+            case .carriageReturnOnly: newline = "\r"
+            case .carriageReturnLineFeed: newline = "\r\n"
+            default: newline = "\n"
+            }
+            event = "\(malformed)event: gpu_telemetry\(newline)data: \(payload)\(newline)\(newline)"
         }
         connections[id]?.send(
             content: Data(event.utf8),

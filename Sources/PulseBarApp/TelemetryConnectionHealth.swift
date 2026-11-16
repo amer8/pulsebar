@@ -8,6 +8,7 @@ struct TelemetryConnectionHealth {
         case live = "Connected"
         case stale = "Telemetry is stale"
         case reconnecting = "Reconnecting…"
+        case paused = "Reconnection paused"
         case expired = "Session expired"
     }
     private(set) var state: State = .signedOut
@@ -27,6 +28,7 @@ struct TelemetryConnectionHealth {
         lastSampleAt = date
     }
     mutating func reconnecting() { state = .reconnecting }
+    mutating func pause() { state = .paused }
     mutating func expire() {
         state = .expired
         lastSampleAt = nil

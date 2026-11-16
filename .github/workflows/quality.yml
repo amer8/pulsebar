@@ -44,3 +44,15 @@ jobs:
 
       - name: Run quality gates
         run: make check
+
+      - name: Build and ad-hoc sign app bundle
+        run: |
+          icon_tool="$(xcode-select -p)/../Applications/Icon Composer.app/Contents/Executables/ictool"
+          if [[ -x "$icon_tool" ]]; then
+            make bundle
+          else
+            echo "Icon Composer is unavailable; building without an icon."
+            make bundle SKIP_ICON=1
+          fi
+          codesign --force --deep --sign - .build/release/PulseBar.app
+          codesign --verify --deep --strict --verbose=2 .build/release/PulseBar.app

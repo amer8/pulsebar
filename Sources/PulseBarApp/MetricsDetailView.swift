@@ -22,7 +22,7 @@ struct MetricsDetailView: View {
     private func presentation(at date: Date) -> TelemetryPanelState {
         var state = TelemetryPanelState(connectionTitle: viewModel.connectionHealth.state.rawValue)
         state.isLive = viewModel.connectionHealth.state == .live
-        state.needsAttention = [.stale, .reconnecting, .expired].contains(viewModel.connectionHealth.state)
+        state.needsAttention = [.stale, .reconnecting, .paused, .expired].contains(viewModel.connectionHealth.state)
         state.canReconnect = viewModel.isSignedIn
         state.lastSampleAt = viewModel.connectionHealth.lastSampleAt
         state.memoryPercent = viewModel.snapshot.memory.percentUsed

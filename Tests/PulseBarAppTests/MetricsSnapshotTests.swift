@@ -7,21 +7,12 @@ final class MetricsSnapshotTests: XCTestCase {
         let snapshot = MetricsSnapshot.signedOut(note: "Sign in required.")
 
         XCTAssertEqual(snapshot.menuBarTitle, "RAM -- GPU --")
-        XCTAssertEqual(snapshot.memory.detailText, "Unavailable")
-        XCTAssertEqual(snapshot.memory.menuDetailText, "--")
-        XCTAssertEqual(snapshot.gpu.detailText, "Unavailable")
-        XCTAssertEqual(snapshot.gpu.menuDetailText, "--")
-        XCTAssertEqual(snapshot.gpu.summaryText, "GPU")
         XCTAssertEqual(snapshot.gpu.note, "Sign in required.")
     }
 
     func testConnectingSnapshotIncludesUsernameInStatusNote() {
         let snapshot = MetricsSnapshot.connecting(username: "alice")
 
-        XCTAssertEqual(snapshot.memory.detailText, "Connecting…")
-        XCTAssertEqual(snapshot.memory.menuDetailText, "--")
-        XCTAssertEqual(snapshot.gpu.detailText, "Connecting…")
-        XCTAssertEqual(snapshot.gpu.menuDetailText, "--")
         XCTAssertEqual(
             snapshot.gpu.note,
             "Connecting to local dashboard as alice…"
@@ -46,11 +37,6 @@ final class MetricsSnapshotTests: XCTestCase {
 
         XCTAssertEqual(liveSnapshot.menuBarTitle, "RAM 75% GPU 37%")
         XCTAssertEqual(unavailableSnapshot.menuBarTitle, "RAM -- GPU --")
-        XCTAssertEqual(unavailableSnapshot.memory.detailText, "Reconnecting…")
-        XCTAssertEqual(unavailableSnapshot.memory.menuDetailText, "--")
-        XCTAssertEqual(unavailableSnapshot.gpu.detailText, "Reconnecting…")
-        XCTAssertEqual(unavailableSnapshot.gpu.menuDetailText, "--")
-        XCTAssertEqual(unavailableSnapshot.gpu.summaryText, "GPU")
         XCTAssertEqual(unavailableSnapshot.gpu.note, "Waiting for telemetry to resume…")
         XCTAssertEqual(unavailableSnapshot.timestamp, timestamp)
     }
@@ -63,14 +49,10 @@ final class MetricsSnapshotTests: XCTestCase {
         )
 
         let snapshot = MetricsSnapshot.live(sample)
-        let detailText = localizedMemoryDetailText(percent: "75%", usedGiB: 48, totalGiB: 64)
 
         XCTAssertEqual(snapshot.menuBarTitle, "RAM 75% GPU 37%")
-        XCTAssertEqual(snapshot.memory.detailText, detailText)
-        XCTAssertEqual(snapshot.memory.menuDetailText, detailText)
-        XCTAssertEqual(snapshot.gpu.detailText, "37%")
-        XCTAssertEqual(snapshot.gpu.menuDetailText, "37%")
-        XCTAssertEqual(snapshot.gpu.summaryText, "GPU 37%")
+        XCTAssertEqual(snapshot.memory.usedGiB, 48)
+        XCTAssertEqual(snapshot.memory.totalGiB, 64)
     }
 
     func testLiveSnapshotRoundsDisplayedTotalMemoryUp() {
@@ -83,10 +65,8 @@ final class MetricsSnapshotTests: XCTestCase {
         let snapshot = MetricsSnapshot.live(sample)
 
         XCTAssertEqual(snapshot.menuBarTitle, "RAM 2% GPU 0%")
-        XCTAssertEqual(
-            snapshot.memory.detailText,
-            localizedMemoryDetailText(percent: "2%", usedGiB: 2.8, totalGiB: 128)
-        )
+        XCTAssertEqual(snapshot.memory.usedGiB ?? -1, 2.8, accuracy: 0.001)
+        XCTAssertEqual(snapshot.memory.totalGiB, 128)
     }
 
     func testLiveSnapshotClampsNegativeUsedMemoryToZero() {
@@ -98,10 +78,8 @@ final class MetricsSnapshotTests: XCTestCase {
 
         let snapshot = MetricsSnapshot.live(sample)
 
-        XCTAssertEqual(
-            snapshot.memory.detailText,
-            localizedMemoryDetailText(percent: "0%", usedGiB: 0, totalGiB: 4)
-        )
+        XCTAssertEqual(snapshot.memory.usedGiB, 0)
+        XCTAssertEqual(snapshot.memory.totalGiB, 4)
         XCTAssertEqual(snapshot.memory.percentText, "0%")
     }
 
@@ -241,9 +219,4 @@ final class MetricsSnapshotTests: XCTestCase {
         XCTAssertEqual(message, URLError(.badServerResponse).localizedDescription)
     }
 
-    private func localizedMemoryDetailText(percent: String, usedGiB: Double, totalGiB: Double) -> String {
-        let usedText = MetricNumberFormat.usedMemoryGiBString(usedGiB)
-        let totalText = MetricNumberFormat.wholeNumberString(totalGiB)
-        return "\(percent) (\(usedText) / \(totalText) GB)"
-    }
 }

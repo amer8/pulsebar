@@ -21,13 +21,18 @@ enum PulseBarTools {
 }
 
 @MainActor
-private struct Tool {
+struct Tool {
     let root: URL
     let environment: [String: String]
 
     init() throws {
         root = try ProjectRoot.find()
         environment = ProcessInfo.processInfo.environment
+    }
+
+    init(root: URL, environment: [String: String]) {
+        self.root = root
+        self.environment = environment
     }
 
     func run(_ arguments: [String]) async throws {
@@ -156,7 +161,7 @@ private struct Tool {
         print(renderHTML(from: notes))
     }
 
-    private func verifyAppcast(_ arguments: [String]) throws {
+    private func verifyAppcast(_ arguments: [String], buildNumber: String? = nil, archiveSize: UInt64? = nil) throws {
         let appcast: URL
         let version: String
 
@@ -174,21 +179,12 @@ private struct Tool {
             throw ToolError("Appcast not found: \(appcast.path)")
         }
 
-        let xml = try String(contentsOf: appcast, encoding: .utf8)
-        guard xml.contains("<sparkle:shortVersionString>\(version)</sparkle:shortVersionString>") else {
-            throw ToolError("Appcast does not contain short version \(version)")
-        }
-        guard xml.contains("PulseBar-\(version).zip") else {
-            throw ToolError("Appcast does not reference PulseBar-\(version).zip")
-        }
-        guard xml.contains("sparkle:edSignature=") else {
-            throw ToolError("Appcast entry does not contain a Sparkle edSignature")
-        }
+        try AppcastVerifier.verify(Data(contentsOf: appcast), version: version, buildNumber: buildNumber, archiveSize: archiveSize)
 
         print("Appcast contains PulseBar \(version) with a Sparkle signature.")
     }
 
-    private func makeAppcast(_ arguments: [String]) throws {
+    func makeAppcast(_ arguments: [String], output: URL? = nil) throws {
         guard arguments.count == 1 || arguments.count == 2 else {
             throw ToolError("Usage: pulsebar-tools make-appcast <PulseBar-version.zip> [feed-url]")
         }
@@ -244,8 +240,9 @@ private struct Tool {
             cwd: workDirectory
         )
 
-        try copyReplacing(workDirectory.appendingPathComponent("appcast.xml"), to: root.appendingPathComponent("appcast.xml"))
-        print("Updated \(root.appendingPathComponent("appcast.xml").path)")
+        let destination = output ?? root.appendingPathComponent("appcast.xml")
+        try Data(contentsOf: workDirectory.appendingPathComponent("appcast.xml")).write(to: destination, options: .atomic)
+        print("Updated \(destination.path)")
     }
 
     private func checkReleaseAssets(_ arguments: [String]) throws {
@@ -302,6 +299,7 @@ private struct Tool {
         try requireCommand("codesign")
         try requireCommand("spctl")
         try requireCleanWorktree()
+        try ReleaseGitPreflight.validateTag(tag, root: root)
         try ReleaseGitPreflight.validate(root: root)
         try validateSparklePrivateKey(sparklePrivateKeyFile)
         try ensureChangelogFinalized(version: marketingVersion)
@@ -328,14 +326,20 @@ private struct Tool {
             }
         }
 
+        let stagingDirectory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("pulsebar-release.\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: stagingDirectory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: stagingDirectory) }
+        let stagedAppcast = stagingDirectory.appendingPathComponent("appcast.xml")
+        try makeAppcast([zip.path, appcastURL], output: stagedAppcast)
+        let archiveSize = try zip.resourceValues(forKeys: [.fileSizeKey]).fileSize
+        guard let archiveSize, archiveSize > 0 else { throw ToolError("release ZIP is empty") }
+        try verifyAppcast([stagedAppcast.path, marketingVersion], buildNumber: buildNumber, archiveSize: UInt64(archiveSize))
+
         let notesFile = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("pulsebar-notes.\(UUID().uuidString).md")
         defer { try? FileManager.default.removeItem(at: notesFile) }
         try releaseNotes(version: marketingVersion, changelog: root.appendingPathComponent("CHANGELOG.md"))
             .write(to: notesFile, atomically: true, encoding: .utf8)
-
-        if try Command.capture("git", ["rev-parse", "-q", "--verify", "refs/tags/\(tag)"], cwd: root, allowFailure: true).isEmpty == false {
-            throw ToolError("tag already exists: \(tag)")
-        }
 
         try Command.run("git", ["push", "origin", "HEAD:refs/heads/main"], cwd: root)
         try Command.run("git", ["tag", "-m", "\(appName) \(marketingVersion)", tag], cwd: root)
@@ -343,7 +347,7 @@ private struct Tool {
         try Command.run(
             "gh",
             [
-                "release", "create", tag,
+                "release", "create", tag, "--draft",
                 zip.path,
                 dSYMZip.path,
                 dmg.path,
@@ -353,13 +357,13 @@ private struct Tool {
             cwd: root
         )
 
-        try makeAppcast([zip.path, appcastURL])
-        try verifyAppcast([root.appendingPathComponent("appcast.xml").path, marketingVersion])
-
-        try Command.run("git", ["add", root.appendingPathComponent("appcast.xml").path], cwd: root)
-        try Command.run("git", ["commit", "-m", "docs: update appcast for \(marketingVersion)"], cwd: root)
-        try Command.run("git", ["push", "origin", "HEAD:refs/heads/main"], cwd: root)
         try checkReleaseAssets([tag])
+        try Command.run("gh", ["release", "edit", tag, "--draft=false"], cwd: root)
+
+        try Data(contentsOf: stagedAppcast).write(to: root.appendingPathComponent("appcast.xml"), options: .atomic)
+        try Command.run("git", ["add", root.appendingPathComponent("appcast.xml").path], cwd: root)
+        try Command.run("git", ["commit", "-m", "Update Sparkle appcast for \(marketingVersion)"], cwd: root)
+        try Command.run("git", ["push", "origin", "HEAD:refs/heads/main"], cwd: root)
 
         print("Release \(marketingVersion) complete.")
     }
@@ -523,8 +527,8 @@ private struct Tool {
         guard !title.contains("Unreleased") else {
             throw ToolError("top changelog section must be finalized, not Unreleased")
         }
-        guard title.hasPrefix(version) else {
-            throw ToolError("top changelog section must start with \(version)")
+        guard titleMatchesVersion(title, version: version) else {
+            throw ToolError("top changelog section must match version \(version)")
         }
     }
 
@@ -670,19 +674,27 @@ enum Command {
         process.currentDirectoryURL = cwd
         process.environment = environment ?? ProcessInfo.processInfo.environment
 
-        let stdout = Pipe()
-        let stderr = Pipe()
         if captureOutput {
+            let stdout = Pipe()
+            let tempDirectory = URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent("pulsebar-command.\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(
+                at: tempDirectory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+            defer { try? FileManager.default.removeItem(at: tempDirectory) }
+            let stderrURL = tempDirectory.appendingPathComponent("stderr")
+            guard FileManager.default.createFile(atPath: stderrURL.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
+                throw ToolError("could not create temporary stderr file")
+            }
+            let stderr = try FileHandle(forUpdating: stderrURL)
+            defer { try? stderr.close() }
             process.standardOutput = stdout
             process.standardError = stderr
-        }
 
-        try process.run()
-        process.waitUntilExit()
-
-        if captureOutput {
+            try process.run()
             let output = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-            let errorOutput = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            process.waitUntilExit()
+            try stderr.seek(toOffset: 0)
+            let errorOutput = String(data: stderr.readDataToEndOfFile(), encoding: .utf8) ?? ""
             if process.terminationStatus != 0 && !allowFailure {
                 if !errorOutput.isEmpty {
                     FileHandle.standardError.writeLine(errorOutput.trimmingCharacters(in: .newlines))
@@ -692,6 +704,8 @@ enum Command {
             return process.terminationStatus == 0 ? output : ""
         }
 
+        try process.run()
+        process.waitUntilExit()
         if process.terminationStatus != 0 && !allowFailure {
             throw ToolError(commandFailureMessage(executable: executable, arguments: arguments, status: process.terminationStatus))
         }
