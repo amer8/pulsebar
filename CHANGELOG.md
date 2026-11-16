@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.4 - 2026-11-16
+
+- Pause automatic reconnection after repeated telemetry failures, including across app restarts; choose Reconnect to resume.
+- Keep the telemetry stream running when an individual event contains invalid data.
+- Reduce per-sample logging and avoid increasing retry delays for cancelled streams.
+- Improve release preflight, appcast verification, and release asset checks.
+- Document the Apple silicon requirement and local dashboard connection security.
+
 ## 0.2.3 - 2026-11-12
 
 - Remember the selected history range and chart scale between launches.
