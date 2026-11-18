@@ -752,7 +752,7 @@ private enum ReadmeAssetRenderer {
             content: ReadmeMenuPreview(appIcon: appIcon, panel: panel, layout: layout)
                 .environment(\.colorScheme, .light).environment(\.locale, Locale(identifier: "en_US"))
                 .environment(\.timeZone, TimeZone(secondsFromGMT: 0)!))
-        renderer.scale = 1
+        renderer.scale = layout == .social ? 2 : 1
         renderer.colorMode = .nonLinear
         guard let image = renderer.nsImage else { throw ToolError("failed to render README preview") }
         try image.writePNG(to: url)
@@ -1016,7 +1016,8 @@ private enum ReadmePreviewLayout {
 private struct ReadmeMenuPreview: View {
     private var isSocial: Bool { layout == .social }
     private var cardWidth: CGFloat { isSocial ? 640 : 830 }
-    private var cardHeight: CGFloat { isSocial ? 320 : 488 }
+    // The GitHub repository card displays the image at approximately 2.64:1.
+    private var cardHeight: CGFloat { isSocial ? 242 : 488 }
     private var safeInset: CGFloat { isSocial ? 24 : 40 }
 
     let appIcon: NSImage?
@@ -1027,8 +1028,8 @@ private struct ReadmeMenuPreview: View {
         ZStack(alignment: .topLeading) {
             backgroundView
             menuBar
-            titleBlock.offset(x: isSocial ? 24 : 49, y: isSocial ? 50 : 70)
-            menuCard.offset(x: isSocial ? 360 : 341, y: isSocial ? 38 : 35)
+            titleBlock.offset(x: isSocial ? 24 : 49, y: isSocial ? 40 : 70)
+            menuCard.offset(x: isSocial ? 380 : 341, y: isSocial ? 34 : 35)
         }
         .frame(width: cardWidth, height: cardHeight, alignment: .topLeading)
         .clipped()
@@ -1038,7 +1039,7 @@ private struct ReadmeMenuPreview: View {
         VStack(alignment: .leading, spacing: 0) {
             if let appIcon {
                 Image(nsImage: appIcon).resizable().interpolation(.high)
-                    .frame(width: isSocial ? 52 : 70, height: isSocial ? 52 : 70)
+                    .frame(width: isSocial ? 42 : 70, height: isSocial ? 42 : 70)
                     .shadow(color: .black.opacity(0.15), radius: 12, x: 0, y: 7)
                     .padding(.bottom, isSocial ? 11 : 20)
             }
@@ -1148,7 +1149,7 @@ private struct ReadmeMenuPreview: View {
     }
 
     private var menuCard: some View {
-        let scale: CGFloat = isSocial ? 0.63 : 1
+        let scale: CGFloat = isSocial ? 0.52 : 1
         let cornerRadius: CGFloat = isSocial ? 8 : 12
         return Image(nsImage: panel)
             .resizable().interpolation(.high).frame(width: panel.size.width * scale, height: panel.size.height * scale)
@@ -1156,7 +1157,7 @@ private struct ReadmeMenuPreview: View {
             .background(alignment: .topLeading) {
                 backgroundView
                     .blur(radius: isSocial ? 9 : 14)
-                    .offset(x: isSocial ? -360 : -341, y: isSocial ? -38 : -35)
+                    .offset(x: isSocial ? -380 : -341, y: isSocial ? -34 : -35)
                     .frame(width: panel.size.width * scale, height: panel.size.height * scale, alignment: .topLeading)
                     .clipped()
                     .overlay(.black.opacity(0.18))
