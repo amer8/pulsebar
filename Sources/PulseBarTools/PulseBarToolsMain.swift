@@ -747,7 +747,7 @@ private enum ReadmeAssetRenderer {
         let state = historySample(at: reference)
         let panel = try nativeImage(
             TelemetryHistoryPanel(state: state, now: reference, historySeconds: .constant(300), actions: TelemetryPanelActions()),
-            size: TelemetryHistoryPanel.preferredSize(for: state), scheme: .light)
+            size: TelemetryHistoryPanel.preferredSize(for: state), scheme: .dark, transparentBackground: true)
         let renderer = ImageRenderer(
             content: ReadmeMenuPreview(appIcon: appIcon, panel: panel, layout: layout)
                 .environment(\.colorScheme, .light).environment(\.locale, Locale(identifier: "en_US"))
@@ -926,7 +926,9 @@ private enum ReadmeAssetRenderer {
         return record
     }
 
-    private static func nativeImage<Content: View>(_ content: Content, size: NSSize, scheme: ColorScheme) throws -> NSImage {
+    private static func nativeImage<Content: View>(
+        _ content: Content, size: NSSize, scheme: ColorScheme, transparentBackground: Bool = false
+    ) throws -> NSImage {
         // Native fields and buttons need AppKit drawing; ImageRenderer omits platform-backed controls.
         _ = NSApplication.shared.setActivationPolicy(.prohibited)
         let view = NSHostingView(
@@ -936,6 +938,10 @@ private enum ReadmeAssetRenderer {
             contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.appearance = NSAppearance(named: scheme == .light ? .aqua : .darkAqua)
+        if transparentBackground {
+            window.isOpaque = false
+            window.backgroundColor = .clear
+        }
         window.contentView = view
         view.frame = NSRect(origin: .zero, size: size)
         view.layoutSubtreeIfNeeded()
@@ -1021,7 +1027,7 @@ private struct ReadmeMenuPreview: View {
         ZStack(alignment: .topLeading) {
             backgroundView
             menuBar
-            titleBlock.offset(x: isSocial ? 24 : 49, y: isSocial ? 135 : 70)
+            titleBlock.offset(x: isSocial ? 24 : 49, y: isSocial ? 50 : 70)
             menuCard.offset(x: isSocial ? 360 : 341, y: isSocial ? 38 : 35)
         }
         .frame(width: cardWidth, height: cardHeight, alignment: .topLeading)
@@ -1029,25 +1035,29 @@ private struct ReadmeMenuPreview: View {
     }
 
     private var titleBlock: some View {
-        HStack(alignment: .center, spacing: 14) {
+        VStack(alignment: .leading, spacing: 0) {
             if let appIcon {
-                Image(nsImage: appIcon)
-                    .resizable()
-                    .interpolation(.high)
-                    .frame(width: isSocial ? 48 : 58, height: isSocial ? 48 : 58)
-                    .shadow(color: .black.opacity(0.18), radius: 14, x: 0, y: 8)
+                Image(nsImage: appIcon).resizable().interpolation(.high)
+                    .frame(width: isSocial ? 52 : 70, height: isSocial ? 52 : 70)
+                    .shadow(color: .black.opacity(0.15), radius: 12, x: 0, y: 7)
+                    .padding(.bottom, isSocial ? 11 : 20)
             }
-
-            VStack(alignment: .leading, spacing: 9) {
-                Text("PulseBar")
-                    .font(.system(size: 23, weight: .semibold))
-                Text("Live DGX Dashboard telemetry in the macOS menu bar.")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+            Text("PulseBar").font(.system(size: isSocial ? 24 : 29, weight: .semibold)).tracking(-0.75)
+            Text("DGX telemetry, made simple.")
+                .font(.system(size: isSocial ? 13 : 15, weight: .medium)).padding(.top, 7)
+            Text("Live memory and GPU insights,\nright where you need them.")
+                .font(.system(size: isSocial ? 11 : 13)).foregroundStyle(.black.opacity(0.68))
+                .fixedSize(horizontal: false, vertical: true).padding(.top, isSocial ? 7 : 11)
+            HStack(spacing: 12) {
+                Image(systemName: "memorychip")
+                Image(systemName: "cpu")
+                Image(systemName: "chart.xyaxis.line")
+                Text("FOR MACOS").tracking(1)
             }
+            .font(.system(size: isSocial ? 9 : 10, weight: .semibold)).foregroundStyle(.black.opacity(0.58))
+            .padding(.top, isSocial ? 13 : 22)
         }
-        .frame(width: isSocial ? 292 : 266, alignment: .leading)
+        .frame(width: 266, alignment: .leading)
     }
 
     private var backgroundView: some View {
@@ -1132,10 +1142,9 @@ private struct ReadmeMenuPreview: View {
                 .font(.system(size: 13, weight: .medium))
                 .monospacedDigit()
         }
-        .foregroundStyle(.primary)
+        .foregroundStyle(.white)
         .padding(.horizontal, safeInset)
         .frame(height: 32)
-        .background(.white.opacity(0.18))
     }
 
     private var menuCard: some View {
@@ -1143,6 +1152,15 @@ private struct ReadmeMenuPreview: View {
         let cornerRadius: CGFloat = isSocial ? 8 : 12
         return Image(nsImage: panel)
             .resizable().interpolation(.high).frame(width: panel.size.width * scale, height: panel.size.height * scale)
+            // Recreate the underlying wallpaper inside the card to approximate macOS backdrop blur offscreen.
+            .background(alignment: .topLeading) {
+                backgroundView
+                    .blur(radius: isSocial ? 9 : 14)
+                    .offset(x: isSocial ? -360 : -341, y: isSocial ? -38 : -35)
+                    .frame(width: panel.size.width * scale, height: panel.size.height * scale, alignment: .topLeading)
+                    .clipped()
+                    .overlay(.black.opacity(0.18))
+            }
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
             .overlay { RoundedRectangle(cornerRadius: cornerRadius).stroke(.white.opacity(0.4), lineWidth: 0.5) }
             .shadow(color: .black.opacity(0.22), radius: isSocial ? 14 : 18, x: 0, y: isSocial ? 8 : 12)

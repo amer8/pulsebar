@@ -45,7 +45,7 @@ INSTALL_DIR ?= $(HOME)/Applications
 INSTALLED_APP := $(INSTALL_DIR)/$(APP_NAME).app
 NOTARIZE_APP_ZIP := /tmp/$(APP_NAME)Notarize.zip
 
-.PHONY: build test runtime-check format format-lint check readme-assets release bundle sign notarize-app dmg signed-dmg notarize-dmg notarize-dmg-only release-dmg zip signed-zip release-zip release-artifacts package-dmg package-zip package-dsym install uninstall
+.PHONY: build test runtime-check verify-linked-sdk format format-lint check readme-assets release bundle sign notarize-app dmg signed-dmg notarize-dmg notarize-dmg-only release-dmg zip signed-zip release-zip release-artifacts package-dmg package-zip package-dsym install uninstall
 .NOTPARALLEL: release-dmg release-zip release-artifacts notarize-dmg
 
 build:
@@ -201,7 +201,17 @@ format-lint:
 runtime-check: build
 	swift run --skip-build PulseBar --check-runtime
 
-check: format-lint build test runtime-check
+verify-linked-sdk: build
+	@set -e; \
+	expected="$$(xcrun --sdk "$${SDKROOT:-macosx}" --show-sdk-version)"; \
+	binary="$$(swift build --show-bin-path)/PulseBar"; \
+	actual="$$(xcrun vtool -show-build "$$binary" | awk '$$1 == "sdk" { print $$2; exit }')"; \
+	if [ "$$actual" != "$$expected" ]; then \
+		echo "PulseBar linked SDK $$actual does not match selected SDK $$expected" >&2; exit 1; \
+	fi; \
+	echo "PulseBar linked SDK: $$actual"
+
+check: format-lint build test runtime-check verify-linked-sdk
 
 readme-assets:
 	mkdir -p "$(README_ASSET_DIR)"

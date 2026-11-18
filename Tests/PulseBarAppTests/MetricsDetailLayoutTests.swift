@@ -3,8 +3,20 @@ import SwiftUI
 import XCTest
 
 @testable import PulseBarApp
+@testable import PulseBarUI
 
 final class MetricsDetailLayoutTests: XCTestCase {
+    @MainActor
+    func testReduceTransparencyMakesPanelBackgroundOpaque() throws {
+        func backgroundAlpha(reduceTransparency: Bool) throws -> CGFloat {
+            let background = TelemetryPanelBackground(reduceTransparency: reduceTransparency).frame(width: 10, height: 10)
+            let image = try XCTUnwrap(ImageRenderer(content: background).cgImage)
+            return try XCTUnwrap(NSBitmapImageRep(cgImage: image).colorAt(x: 5, y: 5)).alphaComponent
+        }
+        XCTAssertEqual(try backgroundAlpha(reduceTransparency: true), 1, accuracy: 0.01)
+        XCTAssertEqual(try backgroundAlpha(reduceTransparency: false), 0, accuracy: 0.01)
+    }
+
     @MainActor
     func testSignedOutPanelHasUsableInitialSize() {
         _ = NSApplication.shared

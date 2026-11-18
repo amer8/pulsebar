@@ -81,6 +81,16 @@ public enum TelemetryChartSelection {
     }
 }
 
+struct TelemetryPanelBackground: View {
+    let reduceTransparency: Bool
+
+    var body: some View {
+        if reduceTransparency {
+            Color(nsColor: .windowBackgroundColor)
+        }
+    }
+}
+
 // Used by both the menu-bar window and native previews.
 public struct TelemetryHistoryPanel: View {
     private let state: TelemetryPanelState
@@ -89,6 +99,7 @@ public struct TelemetryHistoryPanel: View {
     @Binding private var historySeconds: Int
     @Binding private var automaticScale: Bool
     @State private var isShowingAbout = false
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     public init(
         state: TelemetryPanelState, now: Date, historySeconds: Binding<Int>, actions: TelemetryPanelActions,
@@ -151,7 +162,7 @@ public struct TelemetryHistoryPanel: View {
         }
         // Keep the viewport finite when MenuBarExtra probes its compressed opening size.
         .frame(width: Self.preferredSize(for: state).width, height: Self.preferredSize(for: state).height)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(TelemetryPanelBackground(reduceTransparency: reduceTransparency))
     }
 
     private var actionsMenu: some View {
@@ -386,7 +397,8 @@ private struct TelemetryMetricChart: View {
                         }
                         .font(.system(size: 10, weight: .medium)).monospacedDigit()
                         .padding(5)
-                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 5))
+                        // A nested material can disrupt the menu-bar window's backdrop on hover.
+                        .background(Color(nsColor: .windowBackgroundColor), in: RoundedRectangle(cornerRadius: 5))
                         .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color.secondary.opacity(0.2), lineWidth: 0.5))
                         .fixedSize()
                         .position(x: min(max(plot.minX + x, plot.minX + 42), plot.maxX - 42), y: plot.minY + 18)
