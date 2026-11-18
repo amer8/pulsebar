@@ -21,6 +21,18 @@ public struct TelemetryChartPoint: Identifiable, Sendable {
     }
 }
 
+public enum SystemUpdateStatus: Equatable, Sendable {
+    case hidden, unknown, available, upToDate, staleAvailable, staleUpToDate
+
+    public var stale: Self {
+        switch self {
+        case .available, .staleAvailable: .staleAvailable
+        case .upToDate, .staleUpToDate: .staleUpToDate
+        case .hidden, .unknown: .unknown
+        }
+    }
+}
+
 public struct TelemetryPanelState {
     public var connectionTitle: String
     public var isLive = false
@@ -36,7 +48,7 @@ public struct TelemetryPanelState {
     public var points: [TelemetryChartPoint] = []
     public var note: String?
     public var needsSignIn = false
-    public var systemUpdateAvailable = false
+    public var systemUpdateStatus: SystemUpdateStatus = .hidden
 
     public init(connectionTitle: String) { self.connectionTitle = connectionTitle }
 }
@@ -90,7 +102,7 @@ public struct TelemetryHistoryPanel: View {
     }
 
     public static func preferredSize(for state: TelemetryPanelState) -> CGSize {
-        CGSize(width: 400, height: state.systemUpdateAvailable ? 416 : 388)
+        CGSize(width: 400, height: [.hidden, .upToDate].contains(state.systemUpdateStatus) ? 388 : 416)
     }
 
     public var body: some View {
@@ -116,14 +128,23 @@ public struct TelemetryHistoryPanel: View {
                 if let note = state.note, !state.needsSignIn, state.recoveryAction == nil {
                     Text(note).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
-                if state.systemUpdateAvailable {
+                if state.systemUpdateStatus == .available || state.systemUpdateStatus == .staleAvailable {
                     Button(action: actions.openDashboard) {
                         HStack {
-                            Label("DGX system update available", systemImage: "arrow.down.circle")
+                            Label(
+                                state.systemUpdateStatus == .available
+                                    ? "DGX system update available" : "DGX update previously available (status stale)",
+                                systemImage: "arrow.down.circle")
                             Spacer()
                             Image(systemName: "arrow.up.right")
                         }.font(.caption).foregroundStyle(.orange)
                     }.buttonStyle(.plain).help("Open the dashboard to review the system update")
+                } else if state.systemUpdateStatus == .unknown || state.systemUpdateStatus == .staleUpToDate {
+                    Label(
+                        state.systemUpdateStatus == .unknown
+                            ? "DGX update availability unknown" : "DGX update status stale (previously up to date)",
+                        systemImage: "questionmark.circle"
+                    ).font(.caption).foregroundStyle(.secondary)
                 }
             }
             .padding(16).frame(width: 400)

@@ -28,4 +28,18 @@ final class MenuBarPresentationTests: XCTestCase {
         XCTAssertEqual(MenuBarPresentation(state: .live, snapshot: snapshot, display: .memory).accessibilityLabel, "RAM 50%. Connected.")
         XCTAssertEqual(MenuBarPresentation(state: .live, snapshot: snapshot, display: .gpu).accessibilityLabel, "GPU 37%. Connected.")
     }
+
+    func testUpdateStatusPreservesConnectionWarningAndSelectedDisplay() {
+        for display in MenuBarDisplay.allCases {
+            let available = MenuBarPresentation(state: .live, snapshot: .signedOut(), display: display, updateStatus: .available)
+            XCTAssertTrue(available.accessibilityLabel.contains("DGX system update available"))
+            XCTAssertTrue(available.fallbackTitle.hasSuffix("↓"))
+            let stale = MenuBarPresentation(state: .paused, snapshot: .signedOut(), display: display, updateStatus: .staleAvailable)
+            XCTAssertTrue(stale.showsWarning)
+            XCTAssertTrue(stale.accessibilityLabel.contains("Reconnection paused"))
+            XCTAssertTrue(stale.accessibilityLabel.contains("status stale"))
+            XCTAssertTrue(stale.fallbackTitle.hasPrefix("⚠"))
+            XCTAssertTrue(stale.fallbackTitle.hasSuffix("↓?"))
+        }
+    }
 }

@@ -33,7 +33,9 @@ private struct MenuBarStatusItemLabel: View {
 
     var body: some View {
         let presentation = MenuBarPresentation(
-            state: viewModel.connectionHealth.state, snapshot: viewModel.snapshot, display: MenuBarDisplay(rawValue: display) ?? .both)
+            state: viewModel.connectionHealth.state, snapshot: viewModel.snapshot,
+            display: MenuBarDisplay(rawValue: display) ?? .both,
+            updateStatus: viewModel.isSignedIn ? viewModel.updateStatus : .hidden)
         if let menuBarImage = menuBarLabelImage {
             Image(nsImage: menuBarImage)
                 .accessibilityLabel(presentation.accessibilityLabel)
@@ -48,7 +50,10 @@ private struct MenuBarStatusItemLabel: View {
 
     private var menuBarLabelImage: NSImage? {
         let renderer = ImageRenderer(
-            content: MenuBarLabelView(snapshot: viewModel.snapshot, state: viewModel.connectionHealth.state).id(display)
+            content: MenuBarLabelView(
+                snapshot: viewModel.snapshot, state: viewModel.connectionHealth.state,
+                updateStatus: viewModel.isSignedIn ? viewModel.updateStatus : .hidden
+            ).id(display)
         )
         renderer.scale = NSScreen.main?.backingScaleFactor ?? 2
 
@@ -61,9 +66,26 @@ private struct MenuBarStatusItemLabel: View {
     }
 }
 
-private struct MenuBarLabelView: View {
+struct MenuBarUpdateIndicator: Equatable {
+    let isStale: Bool
+
+    init?(status: SystemUpdateStatus) {
+        switch status {
+        case .available: isStale = false
+        case .staleAvailable: isStale = true
+        default: return nil
+        }
+    }
+
+    var accessibilityDescription: String {
+        isStale ? "DGX system update previously available, status stale" : "DGX system update available"
+    }
+}
+
+struct MenuBarLabelView: View {
     let snapshot: MetricsSnapshot
     let state: TelemetryConnectionHealth.State
+    let updateStatus: SystemUpdateStatus
     @AppStorage(MenuBarDisplay.preferenceKey) private var display = MenuBarDisplay.both.rawValue
 
     var body: some View {
@@ -81,6 +103,12 @@ private struct MenuBarLabelView: View {
                 if display != MenuBarDisplay.memory.rawValue {
                     Image(systemName: "cpu.fill")
                     Text(snapshot.gpu.menuBarText)
+                }
+            }
+            if let indicator = MenuBarUpdateIndicator(status: updateStatus) {
+                HStack(spacing: 1) {
+                    Image(systemName: indicator.isStale ? "arrow.down.circle" : "arrow.down.circle.fill")
+                    if indicator.isStale { Text("?").font(.system(size: 9, weight: .bold)) }
                 }
             }
         }

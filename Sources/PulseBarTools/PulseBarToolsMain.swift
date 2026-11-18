@@ -790,7 +790,7 @@ private enum ReadmeAssetRenderer {
                     state.usedMemoryGiB = 2.58
                     state.totalMemoryGiB = 122
                     state.freeMemoryGiB = 119.11
-                    state.systemUpdateAvailable = true
+                    state.systemUpdateStatus = .available
                     state.points = state.points.map {
                         TelemetryChartPoint(timestamp: $0.timestamp, memoryPercent: 2, gpuPercent: 0)
                     }

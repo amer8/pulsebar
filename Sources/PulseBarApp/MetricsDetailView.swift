@@ -40,7 +40,7 @@ struct MetricsDetailView: View {
         }
         state.note = viewModel.snapshot.gpu.note
         state.needsSignIn = !viewModel.isSignedIn && !state.isLive
-        state.systemUpdateAvailable = viewModel.isUpdateAvailable
+        state.systemUpdateStatus = viewModel.isSignedIn ? viewModel.updateStatus : .hidden
         return state
     }
 

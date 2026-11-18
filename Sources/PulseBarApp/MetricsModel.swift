@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import OSLog
+import PulseBarUI
 import SwiftUI
 
 private let updateAvailabilityPollInterval: Duration = .seconds(3_600)
@@ -14,7 +15,7 @@ final class MetricsViewModel: ObservableObject {
     @Published private(set) var snapshot: MetricsSnapshot {
         didSet { if snapshot.gpu.utilizationPercent == nil { history.markGap() } }
     }
-    @Published private(set) var isUpdateAvailable = false
+    @Published private(set) var updateStatus: SystemUpdateStatus = .unknown
     @Published private(set) var endpoint = DashboardEndpoint.current
     @Published var username: String
     @Published var password = ""
@@ -25,6 +26,7 @@ final class MetricsViewModel: ObservableObject {
     private var dashboard: any DashboardServing
     private let syncAppMonitor: NVIDIASyncAppMonitor
     private let retrySleep: @Sendable (Duration) async throws -> Void
+    private let updateSleep: @Sendable (Duration) async throws -> Void
     private let reconnectPauseStore: DashboardReconnectPauseStore
     private var sessionStore: any DashboardSessionStoring
     private let logger = Logger(subsystem: "PulseBar", category: "Dashboard")
@@ -35,7 +37,7 @@ final class MetricsViewModel: ObservableObject {
     private var authenticationTask: Task<Void, Never>?
     private var activeAuthenticationID: UUID?
     private var streamTask: Task<Void, Never>?
-    private var updateAvailabilityTask: Task<Void, Never>?
+    private(set) var updateAvailabilityTask: Task<Void, Never>?
     private var activeTelemetryStreamID: UUID?
     private var activeUpdateAvailabilityTaskID: UUID?
 
@@ -54,7 +56,8 @@ final class MetricsViewModel: ObservableObject {
         demo: Bool = false,
         endpoint: DashboardEndpoint? = nil,
         reconnectPauseStore: DashboardReconnectPauseStore = DashboardReconnectPauseStore(),
-        retrySleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
+        retrySleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
+        updateSleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
     ) {
         let endpoint = endpoint ?? DashboardEndpoint.current
         let dashboard = dashboard ?? DashboardClient(baseURL: endpoint.url)
@@ -75,6 +78,7 @@ final class MetricsViewModel: ObservableObject {
         self.dashboard = dashboard
         self.syncAppMonitor = syncAppMonitor
         self.retrySleep = retrySleep
+        self.updateSleep = updateSleep
         self.reconnectPauseStore = reconnectPauseStore
         self.sessionStore = sessionStore
         self.authToken = authToken
@@ -199,7 +203,7 @@ final class MetricsViewModel: ObservableObject {
         activeTelemetryStreamID = nil
         activeUpdateAvailabilityTaskID = nil
         authToken = nil
-        isUpdateAvailable = false
+        updateStatus = .unknown
         log("Signing in as '\(trimmedUsername)'.")
 
         let password = self.password
@@ -234,7 +238,7 @@ final class MetricsViewModel: ObservableObject {
                 self.authToken = nil
                 self.activeTelemetryStreamID = nil
                 self.activeUpdateAvailabilityTaskID = nil
-                self.isUpdateAvailable = false
+                self.updateStatus = .unknown
                 self.connectionHealth = TelemetryConnectionHealth()
                 self.snapshot = .signedOut(note: message)
                 self.log("Sign-in failed: \(message)")
@@ -261,7 +265,7 @@ final class MetricsViewModel: ObservableObject {
         retryFailures = 0
         username = ""
         password = ""
-        isUpdateAvailable = false
+        updateStatus = .unknown
         connectionHealth = TelemetryConnectionHealth()
         history = TelemetryHistory()
         snapshot = .signedOut(note: "Signed out. Sign in again to resume metrics.")
@@ -289,7 +293,7 @@ final class MetricsViewModel: ObservableObject {
             sessionLoadError = error.userFacingMessage
         }
         password = ""
-        isUpdateAvailable = false
+        updateStatus = .unknown
         retryFailures = 0
         history = TelemetryHistory()
         connectionHealth = TelemetryConnectionHealth()
@@ -367,7 +371,7 @@ final class MetricsViewModel: ObservableObject {
         updateAvailabilityTask?.cancel()
         streamTask = nil
         updateAvailabilityTask = nil
-        isUpdateAvailable = false
+        updateStatus = updateStatus.stale
         showPausedState()
         log("Automatic reconnection paused after repeated telemetry failures.")
         return false
@@ -486,13 +490,12 @@ final class MetricsViewModel: ObservableObject {
         updateAvailabilityTask?.cancel()
         let updateAvailabilityTaskID = UUID()
         activeUpdateAvailabilityTaskID = updateAvailabilityTaskID
-        isUpdateAvailable = false
+        updateStatus = updateStatus.stale
         log("Checking system update availability.")
 
         updateAvailabilityTask = Task { [dashboard] in
-            var hasSuccessfulUpdateAvailabilityCheck = false
-
             while !Task.isCancelled {
+                let delay: Duration
                 do {
                     let availability = try await dashboard.updateAvailability(token: token)
 
@@ -501,7 +504,7 @@ final class MetricsViewModel: ObservableObject {
                             return false
                         }
 
-                        self.isUpdateAvailable = availability.available
+                        self.updateStatus = availability.available ? .available : .upToDate
                         self.log(
                             availability.available
                                 ? "System update is available."
@@ -510,9 +513,8 @@ final class MetricsViewModel: ObservableObject {
                         return true
                     }
 
-                    if isStillActive {
-                        hasSuccessfulUpdateAvailabilityCheck = true
-                    }
+                    guard isStillActive else { return }
+                    delay = updateAvailabilityPollInterval
                 } catch is CancellationError {
                     return
                 } catch DashboardError.unauthorized {
@@ -525,21 +527,20 @@ final class MetricsViewModel: ObservableObject {
                     }
                     return
                 } catch {
-                    await MainActor.run {
+                    let isStillActive = await MainActor.run {
                         guard self.isActiveUpdateAvailabilityTask(id: updateAvailabilityTaskID, token: token) else {
-                            return
+                            return false
                         }
 
-                        self.isUpdateAvailable = false
+                        self.updateStatus = self.updateStatus.stale
                         self.log("Update availability check failed: \(error.userFacingMessage)")
+                        return true
                     }
+                    guard isStillActive else { return }
+                    delay = updateAvailabilityRetryInterval
                 }
 
-                let delay =
-                    hasSuccessfulUpdateAvailabilityCheck
-                    ? updateAvailabilityPollInterval
-                    : updateAvailabilityRetryInterval
-                try? await Task.sleep(for: delay)
+                do { try await self.updateSleep(delay) } catch { return }
             }
         }
     }
@@ -567,7 +568,7 @@ final class MetricsViewModel: ObservableObject {
         authToken = nil
         username = ""
         password = ""
-        isUpdateAvailable = false
+        updateStatus = .unknown
         activeTelemetryStreamID = nil
         activeUpdateAvailabilityTaskID = nil
         removeSavedSession()
