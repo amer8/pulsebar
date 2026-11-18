@@ -1,6 +1,11 @@
 import Charts
 import SwiftUI
 
+public enum TelemetryRecoveryAction {
+    case reconnect
+    case signIn
+}
+
 public struct TelemetryChartPoint: Identifiable, Sendable {
     public let timestamp: Date
     public let memoryPercent: Double
@@ -21,6 +26,7 @@ public struct TelemetryPanelState {
     public var isLive = false
     public var needsAttention = false
     public var canReconnect = false
+    public var recoveryAction: TelemetryRecoveryAction?
     public var lastSampleAt: Date?
     public var memoryPercent: Double?
     public var gpuPercent: Double?
@@ -91,6 +97,9 @@ public struct TelemetryHistoryPanel: View {
         ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: 16) {
                 historyControls
+                if let recoveryAction = state.recoveryAction {
+                    recoveryBanner(recoveryAction)
+                }
                 if state.points.isEmpty {
                     readingHeader("RAM", symbol: "memorychip", value: state.memoryPercent, peak: nil, detail: memoryDetail)
                     readingHeader("GPU", symbol: "cpu", value: state.gpuPercent, peak: nil, detail: gpuDetail)
@@ -104,7 +113,7 @@ public struct TelemetryHistoryPanel: View {
                         detail: gpuDetail, keyPath: \.gpuPercent, color: .teal)
                     timeAxis
                 }
-                if let note = state.note, !state.needsSignIn {
+                if let note = state.note, !state.needsSignIn, state.recoveryAction == nil {
                     Text(note).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
                 if state.systemUpdateAvailable {
@@ -150,6 +159,31 @@ public struct TelemetryHistoryPanel: View {
         .popover(isPresented: $isShowingAbout, arrowEdge: .top) {
             PulseBarAboutContent().onExitCommand { isShowingAbout = false }
         }
+    }
+
+    private func recoveryBanner(_ action: TelemetryRecoveryAction) -> some View {
+        HStack(alignment: .center, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(action == .reconnect ? "Reconnection paused" : "Session expired")
+                    .font(.subheadline.weight(.semibold))
+                Text(action == .reconnect ? "Automatic retries stopped after repeated failures." : "Sign in again to resume telemetry.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+            if action == .reconnect {
+                Button("Reconnect", action: actions.reconnect)
+                    .buttonStyle(.borderedProminent).controlSize(.small)
+            } else {
+                Button("Sign In…", action: actions.openPreferences)
+                    .buttonStyle(.borderedProminent).controlSize(.small)
+            }
+        }
+        .padding(10)
+        .background(.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
     }
 
     private var connectionColor: Color { state.isLive ? .green : (state.needsAttention ? .orange : .secondary) }
@@ -246,10 +280,10 @@ public struct TelemetryHistoryPanel: View {
         VStack(spacing: 8) {
             Image(systemName: "chart.xyaxis.line").font(.title2).foregroundStyle(.tertiary)
             Text(state.needsSignIn ? "Connect your dashboard" : "Waiting for telemetry").font(.subheadline.weight(.medium))
-            if state.needsSignIn {
+            if state.needsSignIn && state.recoveryAction == nil {
                 Text("Sign in to start collecting live telemetry.").font(.caption).foregroundStyle(.secondary)
                 Button("Open Preferences…", action: actions.openPreferences).buttonStyle(.borderedProminent).controlSize(.small)
-            } else {
+            } else if !state.needsSignIn {
                 Text("Your history will appear as samples arrive.").font(.caption).foregroundStyle(.secondary)
             }
         }.frame(maxWidth: .infinity).frame(height: 154)

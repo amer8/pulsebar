@@ -334,7 +334,7 @@ final class MetricsViewModel: ObservableObject {
     private func showPausedState() {
         connectionHealth.pause()
         snapshot = snapshot.replacingTelemetryUnavailable(
-            note: "Automatic reconnection paused after repeated failures. Choose Reconnect from the actions menu to try again.",
+            note: "Automatic reconnection paused after repeated failures. Choose Reconnect to try again.",
             statusText: "Reconnection paused",
             timestamp: .now
         )

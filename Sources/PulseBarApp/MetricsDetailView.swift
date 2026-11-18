@@ -24,6 +24,11 @@ struct MetricsDetailView: View {
         state.isLive = viewModel.connectionHealth.state == .live
         state.needsAttention = [.stale, .reconnecting, .paused, .expired].contains(viewModel.connectionHealth.state)
         state.canReconnect = viewModel.isSignedIn
+        switch viewModel.connectionHealth.state {
+        case .paused: state.recoveryAction = .reconnect
+        case .expired: state.recoveryAction = .signIn
+        default: break
+        }
         state.lastSampleAt = viewModel.connectionHealth.lastSampleAt
         state.memoryPercent = viewModel.snapshot.memory.percentUsed
         state.gpuPercent = viewModel.snapshot.gpu.utilizationPercent

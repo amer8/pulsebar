@@ -781,7 +781,7 @@ private enum ReadmeAssetRenderer {
     static func writeHistoryPreviews(to directory: URL) throws {
         let reference = Date(timeIntervalSince1970: 1_700_041_260)
         for scheme: ColorScheme in [.light, .dark] {
-            for name in ["live", "low-use", "full-scale", "reconnecting", "signed-out"] {
+            for name in ["live", "low-use", "full-scale", "reconnecting", "paused", "expired", "signed-out"] {
                 var state = historySample(at: reference)
                 switch name {
                 case "low-use", "full-scale":
@@ -808,6 +808,28 @@ private enum ReadmeAssetRenderer {
                 case "signed-out":
                     state = TelemetryPanelState(connectionTitle: "Signed out")
                     state.needsSignIn = true
+                case "paused":
+                    state.connectionTitle = "Reconnection paused"
+                    state.isLive = false
+                    state.needsAttention = true
+                    state.memoryPercent = nil
+                    state.gpuPercent = nil
+                    state.usedMemoryGiB = nil
+                    state.totalMemoryGiB = nil
+                    state.freeMemoryGiB = nil
+                    state.recoveryAction = .reconnect
+                case "expired":
+                    state.connectionTitle = "Session expired"
+                    state.isLive = false
+                    state.needsAttention = true
+                    state.needsSignIn = true
+                    state.canReconnect = false
+                    state.memoryPercent = nil
+                    state.gpuPercent = nil
+                    state.usedMemoryGiB = nil
+                    state.totalMemoryGiB = nil
+                    state.freeMemoryGiB = nil
+                    state.recoveryAction = .signIn
                 default: break
                 }
                 let panel = try nativeImage(

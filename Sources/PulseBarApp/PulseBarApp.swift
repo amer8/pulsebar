@@ -32,19 +32,23 @@ private struct MenuBarStatusItemLabel: View {
     @AppStorage(MenuBarDisplay.preferenceKey) private var display = MenuBarDisplay.both.rawValue
 
     var body: some View {
+        let presentation = MenuBarPresentation(
+            state: viewModel.connectionHealth.state, snapshot: viewModel.snapshot, display: MenuBarDisplay(rawValue: display) ?? .both)
         if let menuBarImage = menuBarLabelImage {
             Image(nsImage: menuBarImage)
-                .accessibilityLabel(viewModel.snapshot.menuBarTitle)
+                .accessibilityLabel(presentation.accessibilityLabel)
+                .help(presentation.accessibilityLabel)
         } else {
-            Text(viewModel.snapshot.menuBarTitle)
+            Text(presentation.fallbackTitle)
                 .monospacedDigit()
-                .accessibilityLabel(viewModel.snapshot.menuBarTitle)
+                .accessibilityLabel(presentation.accessibilityLabel)
+                .help(presentation.accessibilityLabel)
         }
     }
 
     private var menuBarLabelImage: NSImage? {
         let renderer = ImageRenderer(
-            content: MenuBarLabelView(snapshot: viewModel.snapshot).id(display)
+            content: MenuBarLabelView(snapshot: viewModel.snapshot, state: viewModel.connectionHealth.state).id(display)
         )
         renderer.scale = NSScreen.main?.backingScaleFactor ?? 2
 
@@ -59,10 +63,14 @@ private struct MenuBarStatusItemLabel: View {
 
 private struct MenuBarLabelView: View {
     let snapshot: MetricsSnapshot
+    let state: TelemetryConnectionHealth.State
     @AppStorage(MenuBarDisplay.preferenceKey) private var display = MenuBarDisplay.both.rawValue
 
     var body: some View {
         HStack(spacing: 6) {
+            if MenuBarPresentation(state: state, snapshot: snapshot).showsWarning {
+                Image(systemName: "exclamationmark.triangle.fill")
+            }
             if display == MenuBarDisplay.icon.rawValue {
                 Image(systemName: "waveform.path.ecg")
             } else {
