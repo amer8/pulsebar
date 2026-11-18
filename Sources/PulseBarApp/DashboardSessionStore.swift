@@ -99,10 +99,12 @@ struct DashboardSessionStore: DashboardSessionStoring {
         guard let data = result, let token = String(data: data, encoding: .utf8) else {
             throw SessionStoreError.invalidTokenData
         }
+        guard (try? DashboardSessionToken.validate(token)) != nil else { throw SessionStoreError.invalidTokenData }
         return token
     }
 
     func saveToken(_ token: String) throws {
+        try DashboardSessionToken.validate(token)
         let tokenData = Data(token.utf8)
         let updateAttributes = [
             kSecValueData as String: tokenData

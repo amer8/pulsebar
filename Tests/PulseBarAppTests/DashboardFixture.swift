@@ -12,9 +12,23 @@ final class DashboardFixture: @unchecked Sendable {
         case unauthorized
         case loginError = "login-error"
         case loginInvalidResponse = "login-invalid-response"
+        case loginEmptyToken
+        case loginInvalidToken
     }
 
     var url: URL { URL(string: "http://127.0.0.1:\(listener.port!.rawValue)")! }
+    struct Request: Sendable {
+        let method: String
+        let path: String
+        let headers: [String: String]
+        let body: Data
+    }
+
+    var requests: [Request] { queue.sync { recordedRequests } }
+    private var recordedRequests: [Request] = []
+    private let redirectLocation: String?
+    private let redirectStatus: Int
+    private let redirectAfterSameOrigin: String?
     private let scenario: Scenario
     private let listener: NWListener
     private let queue = DispatchQueue(label: "PulseBarTests.DashboardFixture")
@@ -23,8 +37,14 @@ final class DashboardFixture: @unchecked Sendable {
     private var timers: [UUID: DispatchSourceTimer] = [:]
     private var stopped = false
 
-    init(scenario: Scenario) async throws {
+    init(
+        scenario: Scenario, redirectLocation: String? = nil, redirectStatus: Int = 307,
+        redirectAfterSameOrigin: String? = nil
+    ) async throws {
         self.scenario = scenario
+        self.redirectLocation = redirectLocation
+        self.redirectStatus = redirectStatus
+        self.redirectAfterSameOrigin = redirectAfterSameOrigin
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
         listener = try NWListener(using: parameters)
@@ -120,6 +140,18 @@ final class DashboardFixture: @unchecked Sendable {
     }
 
     private func respond(_ id: UUID, method: String, path: String, headers: [String: String], body: Data) {
+        recordedRequests.append(Request(method: method, path: path, headers: headers, body: body))
+        let redirect =
+            path.hasPrefix("/api/")
+            ? redirectLocation
+            : (path.hasPrefix("/redirected/api/") ? redirectAfterSameOrigin : nil)
+        if let redirect {
+            let location = redirect == "same-origin" ? "/redirected\(path)" : redirect
+            let response = "HTTP/1.1 \(redirectStatus) Redirect\r\nLocation: \(location)\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            connections[id]?.send(content: Data(response.utf8), completion: .contentProcessed { [weak self] _ in self?.close(id) })
+            return
+        }
+        let path = path.hasPrefix("/redirected/") ? String(path.dropFirst("/redirected".count)) : path
         if method == "POST", path == "/api/login" {
             let credentials = (try? JSONSerialization.jsonObject(with: body)) as? [String: String]
             guard credentials == ["username": "demo", "password": "demo"] else {
@@ -131,6 +163,10 @@ final class DashboardFixture: @unchecked Sendable {
                 respondJSON(id, status: 503, payload: ["error": "Authentication service unavailable."])
             case .loginInvalidResponse:
                 respondJSON(id, payload: ["unexpected": "missing token"])
+            case .loginEmptyToken:
+                respondJSON(id, payload: ["token": ""])
+            case .loginInvalidToken:
+                respondJSON(id, payload: ["token": "bad\nvalue"])
             default:
                 respondJSON(id, payload: ["token": "simulator-token"])
             }

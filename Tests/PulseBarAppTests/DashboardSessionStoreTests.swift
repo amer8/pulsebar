@@ -6,6 +6,21 @@ import XCTest
 
 @MainActor
 final class DashboardSessionStoreTests: XCTestCase {
+    func testInvalidTokensAreNotSavedOrLoaded() throws {
+        let keychain = MemoryDashboardKeychain()
+        let store = makeStore(keychain: keychain)
+        try store.saveToken("valid-token")
+        for token in ["", " ", "a b", "a\r\nb", "é", "=", "a=b"] {
+            XCTAssertThrowsError(try store.saveToken(token), token)
+            XCTAssertEqual(try store.loadToken(), "valid-token")
+            keychain.readData = Data(token.utf8)
+            XCTAssertThrowsError(try store.loadToken(), token)
+            keychain.readData = nil
+        }
+        try store.saveToken("abc-._~+/==")
+        XCTAssertEqual(try store.loadToken(), "abc-._~+/==")
+    }
+
     func testTokenCanBeInsertedUpdatedAndCleared() throws {
         let keychain = MemoryDashboardKeychain()
         let store = makeStore(keychain: keychain)

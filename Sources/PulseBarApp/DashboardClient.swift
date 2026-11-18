@@ -27,16 +27,18 @@ struct UpdateAvailability: Decodable, Sendable {
 struct DashboardClient: DashboardServing {
     private let session: URLSession
     private let baseURL: URL
+    private let redirectDelegate: DashboardRedirectDelegate
 
     init(baseURL: URL = URL(string: "http://127.0.0.1:11000")!, session: URLSession = .shared) {
         self.baseURL = baseURL
         self.session = session
+        self.redirectDelegate = DashboardRedirectDelegate(origin: baseURL)
     }
 
     func checkConnection() async throws -> Bool {
         var request = URLRequest(url: baseURL)
         request.timeoutInterval = 5
-        let (_, response) = try await session.data(for: request)
+        let (_, response) = try await session.data(for: request, delegate: redirectDelegate)
         guard let http = response as? HTTPURLResponse else { return false }
         return (200..<400).contains(http.statusCode)
     }
@@ -50,7 +52,7 @@ struct DashboardClient: DashboardServing {
             "password": password,
         ])
 
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await session.data(for: request, delegate: redirectDelegate)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw DashboardError.invalidResponse
         }
@@ -68,15 +70,17 @@ struct DashboardClient: DashboardServing {
         }
 
         let loginResponse = try JSONDecoder().decode(LoginResponse.self, from: data)
+        try DashboardSessionToken.validate(loginResponse.token)
         return loginResponse.token
     }
 
     func updateAvailability(token: String) async throws -> UpdateAvailability {
+        try DashboardSessionToken.validate(token)
         var request = URLRequest(url: endpoint("/api/v1/updates/available"))
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
 
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await session.data(for: request, delegate: redirectDelegate)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw DashboardError.invalidResponse
         }
@@ -102,6 +106,7 @@ struct DashboardClient: DashboardServing {
         onConnected: @escaping @Sendable () async -> Void = {},
         onSample: @escaping @Sendable (TelemetrySample) async -> Void
     ) async throws {
+        try DashboardSessionToken.validate(token)
         var request = URLRequest(url: endpoint("/api/v1/gpu_telemetry/stream"))
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
@@ -109,7 +114,7 @@ struct DashboardClient: DashboardServing {
 
         onLog("Requesting /api/v1/gpu_telemetry/stream.")
 
-        let (bytes, response) = try await session.bytes(for: request)
+        let (bytes, response) = try await session.bytes(for: request, delegate: redirectDelegate)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw DashboardError.invalidResponse
         }
@@ -222,5 +227,43 @@ struct DashboardClient: DashboardServing {
         }
 
         return (field, value)
+    }
+}
+
+// A per-task delegate also protects callers that inject a custom URLSession.
+private final class DashboardRedirectDelegate: NSObject, URLSessionTaskDelegate, Sendable {
+    private let origin: URL
+
+    init(origin: URL) {
+        self.origin = origin
+    }
+
+    func urlSession(
+        _ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void
+    ) {
+        guard let target = request.url, sameOrigin(origin, target) else {
+            completionHandler(nil)
+            return
+        }
+        var redirected = request
+        if let authorization = task.originalRequest?.value(forHTTPHeaderField: "Authorization") {
+            redirected.setValue(authorization, forHTTPHeaderField: "Authorization")
+        }
+        completionHandler(redirected)
+    }
+
+    private func sameOrigin(_ lhs: URL, _ rhs: URL) -> Bool {
+        guard let left = URLComponents(url: lhs, resolvingAgainstBaseURL: true),
+            let right = URLComponents(url: rhs, resolvingAgainstBaseURL: true),
+            let leftScheme = left.scheme?.lowercased(), let rightScheme = right.scheme?.lowercased(),
+            let leftHost = left.host?.lowercased(), let rightHost = right.host?.lowercased(),
+            right.user == nil, right.password == nil
+        else { return false }
+        func port(_ components: URLComponents, scheme: String) -> Int? {
+            components.port ?? (scheme == "http" ? 80 : scheme == "https" ? 443 : nil)
+        }
+        return leftScheme == rightScheme && leftHost == rightHost
+            && port(left, scheme: leftScheme) == port(right, scheme: rightScheme)
     }
 }

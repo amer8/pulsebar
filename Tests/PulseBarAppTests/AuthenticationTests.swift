@@ -6,6 +6,41 @@ import XCTest
 
 @MainActor
 final class AuthenticationTests: XCTestCase {
+    func testInvalidLoginTokenDoesNotPersistOrStartRequests() async throws {
+        for token in ["", " ", "bad\nheader", "a=b"] {
+            let dashboard = ControlledDashboard()
+            let store = AuthenticationSessionStore()
+            let model = MetricsViewModel(dashboard: dashboard, sessionStore: store)
+            model.username = "demo"
+            model.password = "password"
+            let task = try XCTUnwrap(model.signIn())
+            try await waitForLogin(dashboard, count: 1)
+            await dashboard.completeLogin(at: 0, with: .success(token))
+            await task.value
+            XCTAssertFalse(model.isSignedIn)
+            XCTAssertNil(store.token)
+            XCTAssertEqual(store.username, "")
+            let requests = await dashboard.authenticatedRequests
+            XCTAssertTrue(requests.isEmpty)
+            model.signOut()
+        }
+    }
+
+    func testInvalidSavedTokenDoesNotStartRequests() async throws {
+        let dashboard = ControlledDashboard()
+        let store = AuthenticationSessionStore()
+        try store.saveToken("")
+        store.saveUsername("demo")
+        let model = MetricsViewModel(dashboard: dashboard, sessionStore: store)
+        XCTAssertFalse(model.isSignedIn)
+        XCTAssertNotNil(model.sessionLoadError)
+        model.retrySavedSession()
+        XCTAssertFalse(model.isSignedIn)
+        let requests = await dashboard.authenticatedRequests
+        XCTAssertTrue(requests.isEmpty)
+        model.signOut()
+    }
+
     func testSuccessfulLoginSavesSessionAndClearsPassword() async throws {
         let dashboard = ControlledDashboard()
         let store = AuthenticationSessionStore()

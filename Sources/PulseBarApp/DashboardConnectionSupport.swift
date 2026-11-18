@@ -56,6 +56,7 @@ enum DashboardConnectionMessage {
 
 enum DashboardError: LocalizedError {
     case invalidResponse
+    case invalidSessionToken
     case unauthorized
     case loginFailed
     case missingTelemetry
@@ -63,6 +64,8 @@ enum DashboardError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
+        case .invalidSessionToken:
+            return "The dashboard session token is invalid. Sign in again."
         case .invalidResponse:
             return "The dashboard returned an unexpected response."
         case .unauthorized:
@@ -125,5 +128,28 @@ extension Error {
         default:
             return false
         }
+    }
+}
+
+// RFC 6750 bearer credentials: a nonempty base64-like value with optional trailing padding.
+enum DashboardSessionToken {
+    static func validate(_ token: String) throws {
+        let bytes = Array(token.utf8)
+        var padding = false
+        guard !bytes.isEmpty else { throw DashboardError.invalidSessionToken }
+        var hasValue = false
+        for byte in bytes {
+            if byte == 61 {
+                padding = true
+            } else if !padding
+                && ((65...90).contains(byte) || (97...122).contains(byte)
+                    || (48...57).contains(byte) || [45, 46, 95, 126, 43, 47].contains(byte))
+            {
+                hasValue = true
+            } else {
+                throw DashboardError.invalidSessionToken
+            }
+        }
+        guard hasValue else { throw DashboardError.invalidSessionToken }
     }
 }

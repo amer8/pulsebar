@@ -63,7 +63,13 @@ final class MetricsViewModel: ObservableObject {
         var authToken: String?
         var loadError: String?
         if !demo {
-            do { authToken = try sessionStore.loadToken() } catch { loadError = error.userFacingMessage }
+            do {
+                authToken = try sessionStore.loadToken()
+                if let authToken { try DashboardSessionToken.validate(authToken) }
+            } catch {
+                authToken = nil
+                loadError = error.userFacingMessage
+            }
         }
 
         self.dashboard = dashboard
@@ -209,6 +215,7 @@ final class MetricsViewModel: ObservableObject {
                 let token = try await dashboard.login(username: trimmedUsername, password: password)
                 try Task.checkCancellation()
                 guard self.activeAuthenticationID == authenticationID else { return }
+                try DashboardSessionToken.validate(token)
                 try self.sessionStore.saveToken(token)
                 self.sessionStore.saveUsername(trimmedUsername)
                 self.sessionRemovalError = nil
@@ -274,7 +281,13 @@ final class MetricsViewModel: ObservableObject {
         authToken = nil
         username = sessionStore.loadUsername()
         sessionLoadError = nil
-        do { authToken = try sessionStore.loadToken() } catch { sessionLoadError = error.userFacingMessage }
+        do {
+            authToken = try sessionStore.loadToken()
+            if let authToken { try DashboardSessionToken.validate(authToken) }
+        } catch {
+            authToken = nil
+            sessionLoadError = error.userFacingMessage
+        }
         password = ""
         isUpdateAvailable = false
         retryFailures = 0
@@ -306,6 +319,7 @@ final class MetricsViewModel: ObservableObject {
                 snapshot = .signedOut()
                 return
             }
+            try DashboardSessionToken.validate(token)
             sessionLoadError = nil
             username = sessionStore.loadUsername()
             authToken = token
