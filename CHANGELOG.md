@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.5 - 2026-11-19
+
+- Give the telemetry panel a translucent appearance on supported macOS versions.
+- Show warnings in the menu bar when automatic reconnection pauses or the dashboard session expires, with a recovery action in the panel.
+- Show available DGX system updates in the menu bar and mark the last known status as stale when a check fails.
+- Keep dashboard credentials on the configured origin and reject malformed session tokens.
+
 ## 0.2.4 - 2026-11-16
 
 - Pause automatic reconnection after repeated telemetry failures, including across app restarts; choose Reconnect to resume.
