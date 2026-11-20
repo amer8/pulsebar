@@ -100,6 +100,7 @@ public struct TelemetryHistoryPanel: View {
     @Binding private var automaticScale: Bool
     @State private var isShowingAbout = false
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.openURL) private var openURL
 
     public init(
         state: TelemetryPanelState, now: Date, historySeconds: Binding<Int>, actions: TelemetryPanelActions,
@@ -179,6 +180,11 @@ public struct TelemetryHistoryPanel: View {
             } label: {
                 Label("About PulseBar", systemImage: "info.circle")
             }
+            Button {
+                openURL(URL(string: "https://github.com/amer8/pulsebar/issues/new?template=bug_report.yml")!)
+            } label: {
+                Label("Report bug", systemImage: "ladybug")
+            }
             Divider()
             Button(action: actions.quit) { Label("Quit PulseBar", systemImage: "power") }
                 .keyboardShortcut("q", modifiers: .command)
@@ -187,7 +193,7 @@ public struct TelemetryHistoryPanel: View {
         }
         .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
         .foregroundStyle(.secondary)
-        .help("Dashboard, preferences, about, and quit").accessibilityLabel("PulseBar actions")
+        .help("Dashboard, preferences, about, bug reporting, and quit").accessibilityLabel("PulseBar actions")
         .popover(isPresented: $isShowingAbout, arrowEdge: .top) {
             PulseBarAboutContent().onExitCommand { isShowingAbout = false }
         }

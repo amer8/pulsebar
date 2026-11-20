@@ -1,0 +1,41 @@
+name: Bug report
+description: Report a problem with PulseBar.
+body:
+  - type: input
+    id: macos-version
+    attributes:
+      label: macOS version
+      description: You can find this in About This Mac.
+      placeholder: e.g. 15.7.2
+    validations:
+      required: true
+
+  - type: input
+    id: pulsebar-version
+    attributes:
+      label: PulseBar version
+      description: Open the telemetry panel’s actions menu and choose About PulseBar.
+      placeholder: e.g. 0.2.5
+    validations:
+      required: true
+
+  - type: dropdown
+    id: connection-method
+    attributes:
+      label: Connection method
+      description: How does PulseBar connect to the DGX Dashboard?
+      options:
+        - NVIDIA Sync
+        - Manual SSH tunnel
+        - Other
+        - Not applicable
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps-to-reproduce
+    attributes:
+      label: Steps to reproduce
+      description: List the steps in order, then describe what you expected and what happened.
+    validations:
+      required: true
