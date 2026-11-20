@@ -2,26 +2,24 @@
 
 ## 0.2.5 - 2026-11-19
 
-- Give the telemetry panel a translucent appearance on supported macOS versions.
-- Show warnings in the menu bar when automatic reconnection pauses or the dashboard session expires, with a recovery action in the panel.
-- Show available DGX system updates in the menu bar and mark the last known status as stale when a check fails.
-- Keep dashboard credentials on the configured origin and reject malformed session tokens.
+- The menu bar warns you when you need to reconnect or sign in again.
+- See available DGX system updates in the menu bar. If a check fails, PulseBar marks the last result as out of date.
+- The telemetry panel now has a translucent background on supported macOS versions.
+- PulseBar sends your sign-in details only to your configured dashboard and rejects invalid session tokens.
 
 ## 0.2.4 - 2026-11-16
 
-- Pause automatic reconnection after repeated telemetry failures, including across app restarts; choose Reconnect to resume.
-- Keep the telemetry stream running when an individual event contains invalid data.
-- Reduce per-sample logging and avoid increasing retry delays for cancelled streams.
-- Improve release preflight, appcast verification, and release asset checks.
-- Document the Apple silicon requirement and local dashboard connection security.
+- After repeated connection failures, automatic retries pause until you choose Reconnect, even after an app restart.
+- Live readings continue when the dashboard sends an invalid sample.
+- Cancelling a connection no longer adds extra delay to the next retry.
+- The setup guide now explains the Apple silicon requirement and how PulseBar protects local dashboard connections.
 
 ## 0.2.3 - 2026-11-12
 
-- Remember the selected history range and chart scale between launches.
-- Show the time and value of nearby samples when hovering over the RAM and GPU charts.
-- Simplify the telemetry panel header and move About and reconnect actions into the menu.
-- Improve handling of saved dashboard sessions when Keychain access fails.
-- Update release preflight checks and align the CI Xcode version.
+- PulseBar remembers your selected time range and chart scale between launches.
+- Hover over a RAM or GPU chart to see a reading and its timestamp.
+- About PulseBar and Reconnect are now in the panel’s ··· menu.
+- PulseBar handles Keychain errors more reliably when restoring a saved dashboard session.
 
 ## 0.2.2 - 2026-10-23
 
