@@ -228,13 +228,13 @@ private actor CutoffDashboard: DashboardServing {
     func consumeTelemetryStream(
         token: String,
         onLog: @escaping @Sendable (String) -> Void,
-        onConnected: @escaping @Sendable () async -> Void,
+        onStatus: @escaping @Sendable (TelemetryStreamStatus) async -> Void,
         onSample: @escaping @Sendable (TelemetrySample) async -> Void
     ) async throws {
         streamAttempts += 1
         if mode == .failure { throw URLError(.cannotConnectToHost) }
         self.onSample = onSample
-        await onConnected()
+        await onStatus(.connected)
         if mode == .healthy {
             await onSample(TelemetrySample(gpuUtilizationPercent: 20, memoryTotalMB: 1024, memoryAvailableMB: 512))
         }

@@ -207,9 +207,12 @@ public struct TelemetryHistoryPanel: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(action == .reconnect ? "Reconnection paused" : "Session expired")
                     .font(.subheadline.weight(.semibold))
-                Text(action == .reconnect ? "Automatic retries stopped after repeated failures." : "Sign in again to resume telemetry.")
-                    .font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                Text(
+                    action == .reconnect
+                        ? (state.note ?? "Automatic retries stopped after repeated failures.") : "Sign in again to resume telemetry."
+                )
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 0)
             if action == .reconnect {

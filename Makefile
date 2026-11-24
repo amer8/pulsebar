@@ -43,7 +43,6 @@ APPCAST_URL ?= https://raw.githubusercontent.com/amer8/pulsebar/main/appcast.xml
 SPARKLE_PUBLIC_ED_KEY ?=
 INSTALL_DIR ?= $(HOME)/Applications
 INSTALLED_APP := $(INSTALL_DIR)/$(APP_NAME).app
-NOTARIZE_APP_ZIP := /tmp/$(APP_NAME)Notarize.zip
 
 .PHONY: build test runtime-check verify-linked-sdk format format-lint check readme-assets release bundle sign notarize-app dmg signed-dmg notarize-dmg notarize-dmg-only release-dmg zip signed-zip release-zip release-artifacts package-dmg package-zip package-dsym install uninstall
 .NOTPARALLEL: release-dmg release-zip release-artifacts notarize-dmg
@@ -124,9 +123,11 @@ sign: bundle
 	codesign --verify --strict --verbose=2 "$(BUNDLE_DIR)"
 
 notarize-app: sign
-	rm -f "$(NOTARIZE_APP_ZIP)"
-	/usr/bin/ditto -c -k --keepParent --sequesterRsrc "$(BUNDLE_DIR)" "$(NOTARIZE_APP_ZIP)"
-	xcrun notarytool submit "$(NOTARIZE_APP_ZIP)" --keychain-profile "$(NOTARY_PROFILE)" --wait
+	@set -eu; \
+	work_dir="$$(mktemp -d "$${TMPDIR:-/tmp}/PulseBar-notarize.XXXXXXXX")"; \
+	trap 'rm -rf "$$work_dir"' EXIT; \
+	/usr/bin/ditto -c -k --keepParent --sequesterRsrc "$(BUNDLE_DIR)" "$$work_dir/$(APP_NAME).zip"; \
+	xcrun notarytool submit "$$work_dir/$(APP_NAME).zip" --keychain-profile "$(NOTARY_PROFILE)" --wait
 	xcrun stapler staple "$(BUNDLE_DIR)"
 	xcrun stapler validate "$(BUNDLE_DIR)"
 	spctl -a -t exec -vv "$(BUNDLE_DIR)"
@@ -205,11 +206,17 @@ verify-linked-sdk: build
 	@set -e; \
 	expected="$$(xcrun --sdk "$${SDKROOT:-macosx}" --show-sdk-version)"; \
 	binary="$$(swift build --show-bin-path)/PulseBar"; \
-	actual="$$(xcrun vtool -show-build "$$binary" | awk '$$1 == "sdk" { print $$2; exit }')"; \
+	build_info="$$(xcrun vtool -show-build "$$binary")"; \
+	actual="$$(echo "$$build_info" | awk '$$1 == "sdk" { print $$2; exit }')"; \
 	if [ "$$actual" != "$$expected" ]; then \
 		echo "PulseBar linked SDK $$actual does not match selected SDK $$expected" >&2; exit 1; \
 	fi; \
-	echo "PulseBar linked SDK: $$actual"
+	min_os="$$(echo "$$build_info" | awk '$$1 == "minos" { print $$2; exit }')"; \
+	plist_min_os="$$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$(INFO_PLIST)")"; \
+	if [ "$$min_os" != "$$plist_min_os" ]; then \
+		echo "PulseBar minimum macOS $$min_os does not match Info.plist $$plist_min_os" >&2; exit 1; \
+	fi; \
+	echo "PulseBar linked SDK: $$actual (minimum macOS $$min_os)"
 
 check: format-lint build test runtime-check verify-linked-sdk
 

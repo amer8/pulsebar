@@ -13,9 +13,11 @@ struct TelemetryConnectionHealth {
     }
     private(set) var state: State = .signedOut
     private(set) var lastSampleAt: Date?
+    var unrecognizedEventName: String?
     private var connectedAt: Date?
     mutating func beginConnection() {
         state = .connecting
+        unrecognizedEventName = nil
         lastSampleAt = nil
         connectedAt = nil
     }
@@ -25,12 +27,14 @@ struct TelemetryConnectionHealth {
     }
     mutating func sampleReceived(at date: Date) {
         state = .live
+        unrecognizedEventName = nil
         lastSampleAt = date
     }
     mutating func reconnecting() { state = .reconnecting }
     mutating func pause() { state = .paused }
     mutating func expire() {
         state = .expired
+        unrecognizedEventName = nil
         lastSampleAt = nil
         connectedAt = nil
     }

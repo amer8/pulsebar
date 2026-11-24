@@ -1,5 +1,10 @@
 import Foundation
 
+enum TelemetryStreamStatus: Sendable {
+    case connected
+    case unrecognizedEvent(String)
+}
+
 protocol DashboardServing: Sendable {
     func login(username: String, password: String) async throws -> String
     func checkConnection() async throws -> Bool
@@ -7,7 +12,7 @@ protocol DashboardServing: Sendable {
     func consumeTelemetryStream(
         token: String,
         onLog: @escaping @Sendable (String) -> Void,
-        onConnected: @escaping @Sendable () async -> Void,
+        onStatus: @escaping @Sendable (TelemetryStreamStatus) async -> Void,
         onSample: @escaping @Sendable (TelemetrySample) async -> Void
     ) async throws
 }
@@ -106,7 +111,7 @@ struct DashboardClient: DashboardServing {
     func consumeTelemetryStream(
         token: String,
         onLog: @escaping @Sendable (String) -> Void = { _ in },
-        onConnected: @escaping @Sendable () async -> Void = {},
+        onStatus: @escaping @Sendable (TelemetryStreamStatus) async -> Void = { _ in },
         onSample: @escaping @Sendable (TelemetrySample) async -> Void
     ) async throws {
         try DashboardSessionToken.validate(token)
@@ -133,7 +138,7 @@ struct DashboardClient: DashboardServing {
             throw DashboardError.server("Unable to open the telemetry stream.")
         }
 
-        await onConnected()
+        await onStatus(.connected)
         onLog("Telemetry stream is open. Waiting for SSE events.")
 
         var eventName = ""
@@ -141,13 +146,16 @@ struct DashboardClient: DashboardServing {
         var lineBuffer: [UInt8] = []
         var previousWasCarriageReturn = false
         var eventByteCount = 0
+        var consecutiveUnknownEvents = 0
 
         func handleLine() async throws {
             let line = String(decoding: lineBuffer, as: UTF8.self)
             lineBuffer.removeAll(keepingCapacity: true)
 
             if line.isEmpty {
-                try await handleEvent(name: eventName, dataLines: dataLines, onLog: onLog, onSample: onSample)
+                try await handleEvent(
+                    name: eventName, dataLines: dataLines, consecutiveUnknownEvents: &consecutiveUnknownEvents,
+                    onLog: onLog, onStatus: onStatus, onSample: onSample)
                 eventName = ""
                 dataLines.removeAll(keepingCapacity: true)
                 eventByteCount = 0
@@ -186,17 +194,19 @@ struct DashboardClient: DashboardServing {
     private func handleEvent(
         name: String,
         dataLines: [String],
+        consecutiveUnknownEvents: inout Int,
         onLog: @escaping @Sendable (String) -> Void,
+        onStatus: @escaping @Sendable (TelemetryStreamStatus) async -> Void,
         onSample: @escaping @Sendable (TelemetrySample) async -> Void
     ) async throws {
         guard !dataLines.isEmpty else {
             return
         }
 
-        let data = Data(dataLines.joined(separator: "\n").utf8)
-
         switch name {
         case "gpu_telemetry":
+            consecutiveUnknownEvents = 0
+            let data = Data(dataLines.joined(separator: "\n").utf8)
             do {
                 await onSample(try TelemetryParser.firstSample(from: data))
             } catch let error as DashboardError {
@@ -205,16 +215,22 @@ struct DashboardClient: DashboardServing {
 
         case "error":
             onLog("Received error event from telemetry stream.")
+            let data = Data(dataLines.joined(separator: "\n").utf8)
             if let errorResponse = try? JSONDecoder().decode(DashboardErrorResponse.self, from: data) {
                 throw DashboardError.server(errorResponse.error)
             }
             throw DashboardError.server("The telemetry stream returned an error.")
 
         default:
-            if !name.isEmpty {
-                onLog("Ignored SSE event '\(name)'.")
+            let displayName = String(name.unicodeScalars.prefix(64)).components(separatedBy: .controlCharacters).joined()
+            let eventName = displayName.isEmpty ? "message" : displayName
+            onLog("Ignored SSE event '\(eventName)'.")
+            let warningThreshold = 3
+            guard consecutiveUnknownEvents < warningThreshold else { return }
+            consecutiveUnknownEvents += 1
+            if consecutiveUnknownEvents == warningThreshold {
+                await onStatus(.unrecognizedEvent(eventName))
             }
-            break
         }
     }
 

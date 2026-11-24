@@ -72,22 +72,38 @@ final class DashboardBoundaryTests: XCTestCase {
         event += String(repeating: " ", count: padding) + "\n\n"
 
         let tracker = SampleTracker()
-        try await consumeStream(event + event.replacingOccurrences(of: "\n", with: "\r\n")) { _ in await tracker.received() }
+        try await consumeStream(event + event.replacingOccurrences(of: "\n", with: "\r\n"), onSample: { _ in await tracker.received() })
         let count = await tracker.count
         XCTAssertEqual(count, 2)
     }
 
+    func testIsolatedUnknownEventsDoNotWarnAcrossValidSamples() async throws {
+        let unknown = "event: unrelated\ndata: {}\n\n"
+        let payload = #"{"TelemetryForGPUs":[{"percentage_utilization":37,"memory_total_in_mb":100,"memory_available_in_mb":50}]}"#
+        let body = unknown + unknown + "event: gpu_telemetry\ndata: \(payload)\n\n" + unknown + unknown
+        let tracker = SampleTracker()
+        try await consumeStream(
+            body,
+            onStatus: { status in
+                if case .unrecognizedEvent = status { XCTFail("Short runs of unrelated events should be ignored") }
+            },
+            onSample: { _ in await tracker.received() })
+        let count = await tracker.count
+        XCTAssertEqual(count, 1)
+    }
+
     private func consumeStream(
-        _ body: String, onSample: @escaping @Sendable (TelemetrySample) async -> Void = { _ in XCTFail("Unexpected sample") }
+        _ body: String, onStatus: @escaping @Sendable (TelemetryStreamStatus) async -> Void = { _ in },
+        onSample: @escaping @Sendable (TelemetrySample) async -> Void = { _ in XCTFail("Unexpected sample") }
     ) async throws {
-        let server = try await DashboardFixture(scenario: .live, streamBody: Data(body.utf8))
+        let server = try await DashboardFixture(scenario: .live, firstStreamBody: Data(body.utf8))
         let session = URLSession(configuration: .ephemeral)
         defer {
             session.invalidateAndCancel()
             server.stop()
         }
         try await DashboardClient(baseURL: server.url, session: session).consumeTelemetryStream(
-            token: "simulator-token", onSample: onSample)
+            token: "simulator-token", onStatus: onStatus, onSample: onSample)
     }
 
     func testSameOriginRedirectsPreserveDashboardRequests() async throws {

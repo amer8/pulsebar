@@ -193,9 +193,9 @@ private actor UpdateDashboard: DashboardServing {
     }
     func consumeTelemetryStream(
         token: String, onLog: @escaping @Sendable (String) -> Void,
-        onConnected: @escaping @Sendable () async -> Void, onSample: @escaping @Sendable (TelemetrySample) async -> Void
+        onStatus: @escaping @Sendable (TelemetryStreamStatus) async -> Void, onSample: @escaping @Sendable (TelemetrySample) async -> Void
     ) async throws {
-        await onConnected()
+        await onStatus(.connected)
         defer { streamCancelled = Task.isCancelled }
         try await Task.sleep(for: .seconds(3600))
     }

@@ -49,7 +49,7 @@ Local unsigned builds keep the updater disabled. Signed direct-download builds c
 4. Run `make release-artifacts`. It signs and notarizes the app, staples its ticket, packages the ZIP and dSYM, and creates and notarizes the DMG. Artifacts are written to `.build/release/artifacts/`.
 5. Generate release notes with `swift run pulsebar-tools generate-release-notes <version> <output.md>`. Generate the Sparkle appcast from the final ZIP using the existing signing key, and verify its version, build number, download URL, signature, and archive size. Sparkle's `generate_appcast` tool can use the Keychain directly.
 6. Commit the release metadata, push the release commit and its `v<version>` tag, and publish a GitHub release containing the app ZIP, dSYM ZIP, and DMG. Publish the updated `appcast.xml` after the download assets are available.
-7. Run `swift run pulsebar-tools check-release-assets v<version>`. Update `Casks/pulsebar.rb` in `amer8/homebrew-tap` with the version and the final DMG's SHA-256 checksum.
+7. Run `swift run pulsebar-tools check-release-assets v<version>`. Update `Casks/pulsebar.rb` in `amer8/homebrew-tap` with the version and the final DMG's SHA-256 checksum. Run the **Homebrew cask** workflow after updating the tap to verify both values against the latest published release. The same check runs daily.
 
 Preserve the existing Sparkle signing key so installed copies can verify updates.
 
@@ -71,6 +71,7 @@ make readme-assets
 - `swift build -Xswiftc -warnings-as-errors`.
 - `swift test -Xswiftc -warnings-as-errors`.
 - `swift run --skip-build PulseBar --check-runtime` to verify dynamic frameworks load without opening the UI.
+- `make verify-linked-sdk` to compare the binary's linked SDK with the selected SDK and its minimum macOS version with `Info.plist`.
 
 The GitHub Actions workflow at `.github/workflows/quality.yml` runs on pull requests, pushes to `main`, and manual dispatches.
 
@@ -112,6 +113,8 @@ The current implementation expects `gpu_telemetry` SSE events shaped like this:
 ```
 
 `percentage_utilization` drives the GPU figure. The menu bar `RAM` value is derived from the streamed `memory_total_in_mb` and `memory_available_in_mb` fields, so PulseBar reflects the dashboard payload rather than a separate macOS system probe.
+
+PulseBar displays the first entry in `TelemetryForGPUs`. DGX Dashboard 0.23.3 supplies readings without a GPU model name, so the panel labels them **GPU**. After three consecutive unrecognized data events, the panel shows the name that triggered the warning. A valid telemetry sample clears the message.
 
 ## Project Notes
 

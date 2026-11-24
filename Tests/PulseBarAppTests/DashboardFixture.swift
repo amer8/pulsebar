@@ -6,6 +6,7 @@ final class DashboardFixture: @unchecked Sendable {
     enum Scenario: String {
         case live
         case malformedThenLive
+        case renamedEventsThenLive
         case carriageReturnOnly
         case carriageReturnLineFeed
         case heartbeatOnly = "heartbeat-only"
@@ -30,7 +31,7 @@ final class DashboardFixture: @unchecked Sendable {
     private let redirectStatus: Int
     private let redirectAfterSameOrigin: String?
     private let scenario: Scenario
-    private let streamBody: Data?
+    private var firstStreamBody: Data?
     private let listener: NWListener
     private let queue = DispatchQueue(label: "PulseBarTests.DashboardFixture")
     private var startup: CheckedContinuation<Void, Error>?
@@ -40,10 +41,10 @@ final class DashboardFixture: @unchecked Sendable {
 
     init(
         scenario: Scenario, redirectLocation: String? = nil, redirectStatus: Int = 307,
-        redirectAfterSameOrigin: String? = nil, streamBody: Data? = nil
+        redirectAfterSameOrigin: String? = nil, firstStreamBody: Data? = nil
     ) async throws {
         self.scenario = scenario
-        self.streamBody = streamBody
+        self.firstStreamBody = firstStreamBody
         self.redirectLocation = redirectLocation
         self.redirectStatus = redirectStatus
         self.redirectAfterSameOrigin = redirectAfterSameOrigin
@@ -206,14 +207,17 @@ final class DashboardFixture: @unchecked Sendable {
 
     private func startStream(_ id: UUID) {
         let headers = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n"
-        if let streamBody {
+        if let body = firstStreamBody {
+            firstStreamBody = nil
             connections[id]?.send(
-                content: Data(headers.utf8) + streamBody,
+                content: Data(headers.utf8) + body,
                 completion: .contentProcessed { [weak self] _ in self?.close(id) })
             return
         }
+        let prelude =
+            scenario == .renamedEventsThenLive ? String(repeating: "event: gpu_metrics_v2\ndata: {}\n\n: heartbeat\n\n", count: 3) : ""
         connections[id]?.send(
-            content: Data(headers.utf8),
+            content: Data((headers + prelude).utf8),
             completion: .contentProcessed { [weak self] error in
                 guard let self else { return }
                 guard error == nil, self.connections[id] != nil else {
@@ -221,7 +225,8 @@ final class DashboardFixture: @unchecked Sendable {
                     return
                 }
                 let timer = DispatchSource.makeTimerSource(queue: self.queue)
-                timer.schedule(deadline: .now(), repeating: .seconds(1))
+                let firstSample: DispatchTime = prelude.isEmpty ? .now() : .now() + .seconds(1)
+                timer.schedule(deadline: firstSample, repeating: .seconds(1))
                 timer.setEventHandler { [weak self] in self?.sendEvent(id) }
                 self.timers[id] = timer
                 timer.resume()

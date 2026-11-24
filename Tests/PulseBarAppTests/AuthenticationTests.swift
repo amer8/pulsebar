@@ -301,11 +301,11 @@ private actor ControlledDashboard: DashboardServing {
     func consumeTelemetryStream(
         token: String,
         onLog: @escaping @Sendable (String) -> Void,
-        onConnected: @escaping @Sendable () async -> Void,
+        onStatus: @escaping @Sendable (TelemetryStreamStatus) async -> Void,
         onSample: @escaping @Sendable (TelemetrySample) async -> Void
     ) async throws {
         authenticatedRequests.append(token)
-        await onConnected()
+        await onStatus(.connected)
         try await Task.sleep(for: .seconds(3600))
     }
 }

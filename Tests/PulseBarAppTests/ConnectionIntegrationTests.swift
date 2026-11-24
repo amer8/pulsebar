@@ -92,6 +92,54 @@ final class ConnectionIntegrationTests: XCTestCase {
     }
 
     @MainActor
+    func testNaturalStreamEndReconnectsAndResumesDelivery() async throws {
+        let events = [10, 20].map { utilization in
+            let payload =
+                #"{"TelemetryForGPUs":[{"percentage_utilization":\#(utilization),"memory_total_in_mb":100,"memory_available_in_mb":50}]}"#
+            return "event: gpu_telemetry\ndata: \(payload)\n\n"
+        }.joined()
+        let server = try await DashboardFixture(scenario: .live, firstStreamBody: Data(events.utf8))
+        let session = URLSession(configuration: .ephemeral)
+        let model = MetricsViewModel(
+            dashboard: DashboardClient(baseURL: server.url, session: session), sessionStore: MemorySessionStore())
+        defer {
+            model.signOut()
+            session.invalidateAndCancel()
+            server.stop()
+        }
+
+        try await waitUntil { model.connectionHealth.state == .reconnecting }
+        XCTAssertEqual(model.telemetryPanelNote, "Waiting for the telemetry stream to resume…")
+        XCTAssertEqual(model.history.samples.map(\.gpuPercent), [10, 20])
+        XCTAssertNil(model.snapshot.gpu.utilizationPercent)
+
+        try await waitUntil { model.connectionHealth.state == .live }
+        XCTAssertEqual(model.snapshot.gpu.utilizationPercent, 37)
+        XCTAssertEqual(server.requests.filter { $0.path == "/api/v1/gpu_telemetry/stream" }.count, 2)
+    }
+
+    @MainActor
+    func testRepeatedUnknownEventsShowInPanelUntilTelemetryResumes() async throws {
+        let server = try await DashboardFixture(scenario: .renamedEventsThenLive)
+        let session = URLSession(configuration: .ephemeral)
+        let model = MetricsViewModel(
+            dashboard: DashboardClient(baseURL: server.url, session: session), sessionStore: MemorySessionStore())
+        defer {
+            model.signOut()
+            session.invalidateAndCancel()
+            server.stop()
+        }
+
+        try await waitUntil { model.telemetryPanelNote?.contains("gpu_metrics_v2") == true }
+        XCTAssertEqual(model.connectionHealth.state, .waiting)
+        XCTAssertTrue(model.telemetryPanelNote?.contains("gpu_telemetry") == true)
+        XCTAssertTrue(model.history.samples.isEmpty)
+        try await waitUntil { model.connectionHealth.state == .live }
+        XCTAssertNil(model.telemetryPanelNote)
+        XCTAssertEqual(server.requests.filter { $0.path == "/api/v1/gpu_telemetry/stream" }.count, 1)
+    }
+
+    @MainActor
     func testCarriageReturnLineEndingsDeliverTelemetry() async throws {
         for scenario in [DashboardFixture.Scenario.carriageReturnOnly, .carriageReturnLineFeed] {
             let server = try await DashboardFixture(scenario: scenario)

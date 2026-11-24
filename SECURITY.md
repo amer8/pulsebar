@@ -6,7 +6,7 @@ PulseBar is local-first. It communicates with the local DGX Dashboard endpoint c
 
 - The dashboard uses plain HTTP on loopback. PulseBar sends the password and auth token to whichever process is listening on the configured local port; it cannot verify that process is the intended dashboard or SSH tunnel.
 - After five consecutive telemetry failures, PulseBar pauses authenticated polling for that local port, including after an app restart, until the user selects Reconnect from the actions menu.
-- The auth token is stored as a generic password item in the macOS Keychain.
+- Each dashboard port has its own generic password item in the macOS Keychain. Before uninstalling PulseBar, sign out on each port you used to remove its token. Uninstalling the app, including with Homebrew’s `--zap`, leaves those tokens in Keychain.
 - No telemetry is sent to a third-party service by PulseBar.
 - Diagnostics are written to the macOS unified system log.
 

@@ -38,7 +38,7 @@ struct MetricsDetailView: View {
         state.points = viewModel.history.points(in: historyWindow, at: date).map {
             TelemetryChartPoint(timestamp: $0.timestamp, memoryPercent: $0.memoryPercent, gpuPercent: $0.gpuPercent, segment: $0.segment)
         }
-        state.note = viewModel.snapshot.gpu.note
+        state.note = viewModel.telemetryPanelNote
         state.needsSignIn = !viewModel.isSignedIn && !state.isLive
         state.systemUpdateStatus = viewModel.isSignedIn ? viewModel.updateStatus : .hidden
         return state

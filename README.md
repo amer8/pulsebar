@@ -19,11 +19,11 @@ PulseBar targets the local DGX Dashboard rather than a specific enclosure. Known
 
 - [NVIDIA DGX Spark](https://www.nvidia.com/en-us/products/workstations/dgx-spark/)
 - [Acer Veriton GN100 AI Mini Workstation](https://www.acer.com/us-en/desktops-and-all-in-ones/veriton-workstations/veriton-gn100-ai-mini-workstation)
-- [ASUS Ascent GX10](https://www.asus.com/de/networking-iot-servers/desktop-ai-supercomputer/ultra-small-ai-supercomputers/asus-ascent-gx10/)
-- [Dell Pro Max with GB10](https://www.dell.com/de-de/dt/lp/dell-pro-max-nvidia-ai-dev)
-- [GIGABYTE AI TOP ATOM](https://www.gigabyte.com/de/AI-TOP-PC/GIGABYTE-AI-TOP-ATOM)
-- [HP ZGX Nano AI Station](https://www.hp.com/de-de/workstations/zgx-nano-ai-station.html)
-- [Lenovo ThinkStation PGX](https://www.lenovo.com/de/de/p/workstations/thinkstationp/lenovo-thinkstation-pgx-sff/len102s0023)
+- [ASUS Ascent GX10](https://www.asus.com/us/networking-iot-servers/desktop-ai-supercomputer/ultra-small-ai-supercomputers/asus-ascent-gx10/)
+- [Dell Pro Max with GB10](https://www.dell.com/en-us/shop/desktop-computers/spd/dellpromaxwithgb10fcm1253)
+- [GIGABYTE AI TOP ATOM](https://www.gigabyte.com/AI-TOP-PC/GIGABYTE-AI-TOP-ATOM)
+- [HP ZGX Nano AI Station](https://www.hp.com/us-en/workstations/zgx-nano-ai-station.html)
+- [Lenovo ThinkStation PGX](https://www.lenovo.com/us/en/p/workstations/thinkstation-p-series/lenovo-thinkstation-pgx-sff/len102s0023)
 - [MSI EdgeXpert MS-C931](https://ipc.msi.com/product_detail/Industrial-Computer-Box-PC/AI-Supercomputer/EdgeXpert-MS-C931)
 
 [NVIDIA Sync](https://build.nvidia.com/spark/connect-to-your-spark/sync) can expose the local dashboard automatically. Without NVIDIA Sync, forward the dashboard port manually, following NVIDIA's [manual SSH flow](https://build.nvidia.com/spark/connect-to-your-spark/manual-ssh):

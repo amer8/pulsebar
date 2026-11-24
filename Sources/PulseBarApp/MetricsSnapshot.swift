@@ -13,7 +13,6 @@ struct MetricsSnapshot {
         MetricsSnapshot(
             memory: MemorySnapshot(statusText: "Unavailable"),
             gpu: GPUSnapshot(
-                deviceName: "GPU",
                 utilizationPercent: nil,
                 statusText: "Unavailable",
                 note: note
@@ -28,7 +27,6 @@ struct MetricsSnapshot {
         return MetricsSnapshot(
             memory: MemorySnapshot(statusText: "Connecting…"),
             gpu: GPUSnapshot(
-                deviceName: "GPU",
                 utilizationPercent: nil,
                 statusText: "Connecting…",
                 note: prefix
@@ -51,7 +49,6 @@ struct MetricsSnapshot {
                 statusText: nil
             ),
             gpu: GPUSnapshot(
-                deviceName: "GPU",
                 utilizationPercent: sample.gpuUtilizationPercent,
                 statusText: nil,
                 note: nil
@@ -64,7 +61,6 @@ struct MetricsSnapshot {
         MetricsSnapshot(
             memory: MemorySnapshot(statusText: statusText),
             gpu: GPUSnapshot(
-                deviceName: gpu.deviceName,
                 utilizationPercent: nil,
                 statusText: statusText,
                 note: note
@@ -103,7 +99,6 @@ struct MemorySnapshot {
 }
 
 struct GPUSnapshot {
-    let deviceName: String?
     let utilizationPercent: Double?
     let statusText: String?
     let note: String?

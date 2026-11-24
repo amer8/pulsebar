@@ -1,0 +1,38 @@
+name: Homebrew cask
+
+on:
+  schedule:
+    - cron: '17 7 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check-cask:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Compare the published cask with the latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          release="$(gh api repos/amer8/pulsebar/releases/latest)"
+          tag="$(jq -er '.tag_name' <<< "$release")"
+          cask="$(gh api -H 'Accept: application/vnd.github.raw+json' repos/amer8/homebrew-tap/contents/Casks/pulsebar.rb)"
+          version="$(sed -nE 's/^[[:space:]]*version "([^"]+)"[[:space:]]*$/\1/p' <<< "$cask")"
+          if [[ -z "$version" || "$tag" != "v$version" ]]; then
+            echo "Expected cask version ${tag#v}, found '$version'." >&2
+            exit 1
+          fi
+
+          dmg="PulseBar-$version.dmg"
+          digest="$(jq -r --arg dmg "$dmg" '.assets[] | select(.name == $dmg) | .digest' <<< "$release")"
+          checksum="$(sed -nE 's/^[[:space:]]*sha256 "([[:xdigit:]]{64})"[[:space:]]*$/\1/p' <<< "$cask")"
+          if [[ -z "$checksum" || "$digest" != "sha256:$checksum" ]]; then
+            echo "SHA-256 mismatch for $dmg. Release digest '$digest', cask checksum '$checksum'." >&2
+            exit 1
+          fi
+          echo "Cask matches $tag and the SHA-256 of $dmg."

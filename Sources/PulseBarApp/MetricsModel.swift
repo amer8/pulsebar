@@ -45,6 +45,13 @@ final class MetricsViewModel: ObservableObject {
         authToken != nil
     }
 
+    var telemetryPanelNote: String? {
+        if let name = connectionHealth.unrecognizedEventName {
+            return "The dashboard sent an unrecognized event ‘\(name)’. PulseBar expects ‘gpu_telemetry’."
+        }
+        return snapshot.gpu.note
+    }
+
     var canSignIn: Bool {
         !isAuthenticating && !username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !password.isEmpty
     }
@@ -174,6 +181,7 @@ final class MetricsViewModel: ObservableObject {
 
         if resetFailures {
             retryFailures = 0
+            connectionHealth.unrecognizedEventName = nil
             reconnectPauseStore.setPaused(false, for: endpoint)
         } else if reconnectPauseStore.isPaused(for: endpoint) {
             showPausedState()
@@ -401,14 +409,19 @@ final class MetricsViewModel: ObservableObject {
                                 self.log(message)
                             }
                         },
-                        onConnected: { @MainActor [weak self] in
+                        onStatus: { @MainActor [weak self] status in
                             guard let self, self.isActiveTelemetryStream(id: streamID, token: token) else { return }
-                            self.connectionHealth.connected(at: .now)
-                            self.snapshot = self.snapshot.replacingTelemetryUnavailable(
-                                note: "Connected to local dashboard. Waiting for the first telemetry event…",
-                                statusText: "Waiting…",
-                                timestamp: .now
-                            )
+                            switch status {
+                            case .connected:
+                                self.connectionHealth.connected(at: .now)
+                                self.snapshot = self.snapshot.replacingTelemetryUnavailable(
+                                    note: "Connected to local dashboard. Waiting for the first telemetry event…",
+                                    statusText: "Waiting…",
+                                    timestamp: .now
+                                )
+                            case .unrecognizedEvent(let name):
+                                self.connectionHealth.unrecognizedEventName = name
+                            }
                         }
                     ) { @MainActor [weak self] sample in
                         guard let self, self.isActiveTelemetryStream(id: streamID, token: token) else { return }
@@ -442,6 +455,7 @@ final class MetricsViewModel: ObservableObject {
         let note: String
         if let error {
             log("Telemetry stream error: \(error.userFacingMessage)")
+            connectionHealth.unrecognizedEventName = nil
             note = dashboardConnectionFailureMessage(for: error)
         } else {
             log("Telemetry stream ended. Waiting to reconnect.")
