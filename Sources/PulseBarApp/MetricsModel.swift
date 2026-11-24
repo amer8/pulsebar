@@ -133,19 +133,25 @@ final class MetricsViewModel: ObservableObject {
     }
 
     private func startDemo() {
-        streamTask = Task {
+        streamTask = Task { [weak self] in
             var tick = 0.0
             while !Task.isCancelled {
                 let sample = TelemetrySample(
                     gpuUtilizationPercent: 50 + 40 * sin(tick / 10), memoryTotalMB: 131_072,
                     memoryAvailableMB: 65_536 + 24_000 * cos(tick / 15))
-                connectionHealth.sampleReceived(at: .now)
-                history.append(sample, at: .now)
-                snapshot = .live(sample)
+                self?.receiveSample(sample)
                 tick += 1
                 do { try await Task.sleep(for: .seconds(1)) } catch { return }
             }
         }
+    }
+
+    private func receiveSample(_ sample: TelemetrySample) {
+        guard TelemetryHistory.accepts(sample) else { return }
+        history.append(sample, at: .now)
+        retryFailures = 0
+        connectionHealth.sampleReceived(at: .now)
+        snapshot = .live(sample)
     }
 
     deinit {
@@ -383,107 +389,67 @@ final class MetricsViewModel: ObservableObject {
         activeTelemetryStreamID = streamID
         log("Opening telemetry stream.")
 
-        streamTask = Task { [dashboard] in
+        streamTask = Task { [weak self, dashboard, retrySleep] in
             while !Task.isCancelled {
+                let streamError: Error?
                 do {
                     try await dashboard.consumeTelemetryStream(
                         token: token,
-                        onLog: { message in
-                            Task { @MainActor in
-                                guard self.isActiveTelemetryStream(id: streamID, token: token) else {
-                                    return
-                                }
-
+                        onLog: { [weak self] message in
+                            Task { @MainActor [weak self] in
+                                guard let self, self.isActiveTelemetryStream(id: streamID, token: token) else { return }
                                 self.log(message)
                             }
                         },
-                        onConnected: {
-                            await MainActor.run {
-                                guard self.isActiveTelemetryStream(id: streamID, token: token) else {
-                                    return
-                                }
-
-                                self.connectionHealth.connected(at: .now)
-                                self.snapshot = self.snapshot.replacingTelemetryUnavailable(
-                                    note: "Connected to local dashboard. Waiting for the first telemetry event…",
-                                    statusText: "Waiting…",
-                                    timestamp: .now
-                                )
-                            }
-                        }
-                    ) { sample in
-                        await MainActor.run {
-                            guard self.isActiveTelemetryStream(id: streamID, token: token) else {
-                                return
-                            }
-
-                            guard TelemetryHistory.accepts(sample) else { return }
-                            self.history.append(sample, at: .now)
-                            self.retryFailures = 0
-                            self.connectionHealth.sampleReceived(at: .now)
-                            self.snapshot = .live(sample)
-                        }
-                    }
-
-                    if !Task.isCancelled {
-                        await MainActor.run {
-                            guard self.isActiveTelemetryStream(id: streamID, token: token) else {
-                                return
-                            }
-
-                            self.connectionHealth.reconnecting()
-                            self.log("Telemetry stream ended. Waiting to reconnect.")
+                        onConnected: { @MainActor [weak self] in
+                            guard let self, self.isActiveTelemetryStream(id: streamID, token: token) else { return }
+                            self.connectionHealth.connected(at: .now)
                             self.snapshot = self.snapshot.replacingTelemetryUnavailable(
-                                note: "Waiting for the telemetry stream to resume…",
-                                statusText: "Reconnecting…",
+                                note: "Connected to local dashboard. Waiting for the first telemetry event…",
+                                statusText: "Waiting…",
                                 timestamp: .now
                             )
                         }
-
-                        guard !Task.isCancelled, isActiveTelemetryStream(id: streamID, token: token), recordStreamFailure() else { return }
-                        try? await retrySleep(TelemetryConnectionHealth.retryDelay(failures: retryFailures))
+                    ) { @MainActor [weak self] sample in
+                        guard let self, self.isActiveTelemetryStream(id: streamID, token: token) else { return }
+                        self.receiveSample(sample)
                     }
+                    streamError = nil
                 } catch is CancellationError {
-                    await MainActor.run {
-                        guard self.isActiveTelemetryStream(id: streamID, token: token) else {
-                            return
-                        }
-
-                        self.log("Telemetry stream task cancelled.")
-                    }
+                    guard let self, self.isActiveTelemetryStream(id: streamID, token: token) else { return }
+                    self.log("Telemetry stream task cancelled.")
                     return
                 } catch let error as URLError where error.code == .cancelled {
                     return
                 } catch DashboardError.unauthorized {
-                    await MainActor.run {
-                        guard self.isActiveTelemetryStream(id: streamID, token: token) else {
-                            return
-                        }
-
-                        self.expireDashboardSession(logMessage: "Telemetry stream returned 401.")
-                    }
+                    guard let self, self.isActiveTelemetryStream(id: streamID, token: token) else { return }
+                    self.expireDashboardSession(logMessage: "Telemetry stream returned 401.")
                     return
                 } catch {
-                    guard !Task.isCancelled else { return }
-                    await MainActor.run {
-                        guard self.isActiveTelemetryStream(id: streamID, token: token) else {
-                            return
-                        }
-
-                        self.connectionHealth.reconnecting()
-                        self.log("Telemetry stream error: \(error.userFacingMessage)")
-                        self.snapshot = self.snapshot.replacingTelemetryUnavailable(
-                            note: self.dashboardConnectionFailureMessage(for: error),
-                            statusText: "Reconnecting…",
-                            timestamp: .now
-                        )
-                    }
-
-                    guard !Task.isCancelled, isActiveTelemetryStream(id: streamID, token: token), recordStreamFailure() else { return }
-                    try? await retrySleep(TelemetryConnectionHealth.retryDelay(failures: retryFailures))
+                    streamError = error
                 }
+                guard !Task.isCancelled, let delay = self?.prepareStreamRetry(id: streamID, token: token, error: streamError) else {
+                    return
+                }
+                try? await retrySleep(delay)
             }
         }
+    }
+
+    private func prepareStreamRetry(id: UUID, token: String, error: Error?) -> Duration? {
+        guard isActiveTelemetryStream(id: id, token: token) else { return nil }
+        connectionHealth.reconnecting()
+        let note: String
+        if let error {
+            log("Telemetry stream error: \(error.userFacingMessage)")
+            note = dashboardConnectionFailureMessage(for: error)
+        } else {
+            log("Telemetry stream ended. Waiting to reconnect.")
+            note = "Waiting for the telemetry stream to resume…"
+        }
+        snapshot = snapshot.replacingTelemetryUnavailable(note: note, statusText: "Reconnecting…", timestamp: .now)
+        guard recordStreamFailure() else { return nil }
+        return TelemetryConnectionHealth.retryDelay(failures: retryFailures)
     }
 
     private func startUpdateAvailabilityChecks(using token: String) {
@@ -493,54 +459,30 @@ final class MetricsViewModel: ObservableObject {
         updateStatus = updateStatus.stale
         log("Checking system update availability.")
 
-        updateAvailabilityTask = Task { [dashboard] in
+        updateAvailabilityTask = Task { [weak self, dashboard, updateSleep] in
             while !Task.isCancelled {
                 let delay: Duration
                 do {
                     let availability = try await dashboard.updateAvailability(token: token)
 
-                    let isStillActive = await MainActor.run {
-                        guard self.isActiveUpdateAvailabilityTask(id: updateAvailabilityTaskID, token: token) else {
-                            return false
-                        }
-
-                        self.updateStatus = availability.available ? .available : .upToDate
-                        self.log(
-                            availability.available
-                                ? "System update is available."
-                                : "System is up to date."
-                        )
-                        return true
-                    }
-
-                    guard isStillActive else { return }
+                    guard let self, self.isActiveUpdateAvailabilityTask(id: updateAvailabilityTaskID, token: token) else { return }
+                    self.updateStatus = availability.available ? .available : .upToDate
+                    self.log(availability.available ? "System update is available." : "System is up to date.")
                     delay = updateAvailabilityPollInterval
                 } catch is CancellationError {
                     return
                 } catch DashboardError.unauthorized {
-                    await MainActor.run {
-                        guard self.isActiveUpdateAvailabilityTask(id: updateAvailabilityTaskID, token: token) else {
-                            return
-                        }
-
-                        self.expireDashboardSession(logMessage: "Update availability check returned 401.")
-                    }
+                    guard let self, self.isActiveUpdateAvailabilityTask(id: updateAvailabilityTaskID, token: token) else { return }
+                    self.expireDashboardSession(logMessage: "Update availability check returned 401.")
                     return
                 } catch {
-                    let isStillActive = await MainActor.run {
-                        guard self.isActiveUpdateAvailabilityTask(id: updateAvailabilityTaskID, token: token) else {
-                            return false
-                        }
-
-                        self.updateStatus = self.updateStatus.stale
-                        self.log("Update availability check failed: \(error.userFacingMessage)")
-                        return true
-                    }
-                    guard isStillActive else { return }
+                    guard let self, self.isActiveUpdateAvailabilityTask(id: updateAvailabilityTaskID, token: token) else { return }
+                    self.updateStatus = self.updateStatus.stale
+                    self.log("Update availability check failed: \(error.userFacingMessage)")
                     delay = updateAvailabilityRetryInterval
                 }
 
-                do { try await self.updateSleep(delay) } catch { return }
+                do { try await updateSleep(delay) } catch { return }
             }
         }
     }

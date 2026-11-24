@@ -60,6 +60,8 @@ enum DashboardError: LocalizedError {
     case unauthorized
     case loginFailed
     case missingTelemetry
+    case telemetryLineTooLong
+    case telemetryEventTooLarge
     case server(String)
 
     var errorDescription: String? {
@@ -74,6 +76,10 @@ enum DashboardError: LocalizedError {
             return "Login failed. Check your dashboard credentials."
         case .missingTelemetry:
             return "The telemetry stream did not include GPU data."
+        case .telemetryLineTooLong:
+            return "A telemetry stream line exceeded the size limit."
+        case .telemetryEventTooLarge:
+            return "A telemetry stream event exceeded the size limit."
         case .server(let message):
             return message
         }

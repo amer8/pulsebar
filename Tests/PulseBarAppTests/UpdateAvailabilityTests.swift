@@ -76,6 +76,23 @@ final class UpdateAvailabilityTests: XCTestCase {
         await sleep.resume(1)
     }
 
+    func testReleasingModelCancelsOpenStreamAndPendingUpdateRequest() async throws {
+        let dashboard = UpdateDashboard()
+        var model: MetricsViewModel? = makeModel(dashboard, UpdateSleep(), UpdateSessionStore())
+        let retainedModel = { [weak model] in model }
+        defer { retainedModel()?.signOut() }
+        let updateTask = try XCTUnwrap(model?.updateAvailabilityTask)
+        try await waitUntil { model?.connectionHealth.state == .waiting }
+        try await waitUntil { await dashboard.tokens.count == 1 }
+
+        model = nil
+        XCTAssertNil(retainedModel())
+        XCTAssertTrue(updateTask.isCancelled)
+        await dashboard.complete(0, .failure(CancellationError()))
+        await updateTask.value
+        try await waitUntil { await dashboard.streamCancelled }
+    }
+
     func testUnauthorizedExpiresSessionAndClearsSavedCredentials() async throws {
         let dashboard = UpdateDashboard()
         let sleep = UpdateSleep()
@@ -162,6 +179,7 @@ private enum UpdateTestError: Error { case timeout }
 
 private actor UpdateDashboard: DashboardServing {
     private(set) var tokens: [String] = []
+    private(set) var streamCancelled = false
     private var pending: [Int: CheckedContinuation<UpdateAvailability, Error>] = [:]
     func login(username: String, password: String) async throws -> String { "token" }
     func checkConnection() async throws -> Bool { true }
@@ -178,6 +196,7 @@ private actor UpdateDashboard: DashboardServing {
         onConnected: @escaping @Sendable () async -> Void, onSample: @escaping @Sendable (TelemetrySample) async -> Void
     ) async throws {
         await onConnected()
+        defer { streamCancelled = Task.isCancelled }
         try await Task.sleep(for: .seconds(3600))
     }
 }

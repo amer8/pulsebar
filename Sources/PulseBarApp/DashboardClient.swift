@@ -25,6 +25,9 @@ struct UpdateAvailability: Decodable, Sendable {
 }
 
 struct DashboardClient: DashboardServing {
+    static let maximumLineBytes = 64 * 1024
+    static let maximumEventBytes = 256 * 1024
+
     private let session: URLSession
     private let baseURL: URL
     private let redirectDelegate: DashboardRedirectDelegate
@@ -115,6 +118,7 @@ struct DashboardClient: DashboardServing {
         onLog("Requesting /api/v1/gpu_telemetry/stream.")
 
         let (bytes, response) = try await session.bytes(for: request, delegate: redirectDelegate)
+        defer { bytes.task.cancel() }
         guard let httpResponse = response as? HTTPURLResponse else {
             throw DashboardError.invalidResponse
         }
@@ -136,6 +140,7 @@ struct DashboardClient: DashboardServing {
         var dataLines: [String] = []
         var lineBuffer: [UInt8] = []
         var previousWasCarriageReturn = false
+        var eventByteCount = 0
 
         func handleLine() async throws {
             let line = String(decoding: lineBuffer, as: UTF8.self)
@@ -145,6 +150,7 @@ struct DashboardClient: DashboardServing {
                 try await handleEvent(name: eventName, dataLines: dataLines, onLog: onLog, onSample: onSample)
                 eventName = ""
                 dataLines.removeAll(keepingCapacity: true)
+                eventByteCount = 0
                 return
             }
             if line.hasPrefix(":") { return }
@@ -159,17 +165,19 @@ struct DashboardClient: DashboardServing {
 
         for try await byte in bytes {
             if Task.isCancelled { throw CancellationError() }
-            if byte == 0x0D {
-                try await handleLine()
-                previousWasCarriageReturn = true
-            } else if byte == 0x0A {
-                if previousWasCarriageReturn {
-                    previousWasCarriageReturn = false
-                } else {
-                    try await handleLine()
-                }
-            } else {
+            if byte == 0x0A && previousWasCarriageReturn {
                 previousWasCarriageReturn = false
+                continue
+            }
+            previousWasCarriageReturn = byte == 0x0D
+
+            // Count each line ending once, including the blank line that dispatches the event.
+            guard eventByteCount < Self.maximumEventBytes else { throw DashboardError.telemetryEventTooLarge }
+            eventByteCount += 1
+            if previousWasCarriageReturn || byte == 0x0A {
+                try await handleLine()
+            } else {
+                guard lineBuffer.count < Self.maximumLineBytes else { throw DashboardError.telemetryLineTooLong }
                 lineBuffer.append(byte)
             }
         }

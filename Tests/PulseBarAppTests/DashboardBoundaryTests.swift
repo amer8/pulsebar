@@ -42,6 +42,54 @@ final class DashboardBoundaryTests: XCTestCase {
         XCTAssertTrue(server.requests.isEmpty)
     }
 
+    func testRejectsOversizedLineBeforeItsTerminator() async throws {
+        let line = String(repeating: "x", count: DashboardClient.maximumLineBytes + 1)
+        do {
+            try await consumeStream(line)
+            XCTFail("Accepted an oversized unterminated line")
+        } catch DashboardError.telemetryLineTooLong {}
+    }
+
+    func testEmptyDataFieldsCountTowardEventLimit() async throws {
+        let line = "data:\n"
+        let limit = DashboardClient.maximumEventBytes
+        let fields = String(repeating: line, count: limit / line.utf8.count)
+        let tail = String(repeating: "x", count: limit - fields.utf8.count + 1)
+        do {
+            try await consumeStream(fields + tail)
+            XCTFail("Accepted an oversized unterminated event")
+        } catch DashboardError.telemetryEventTooLarge {}
+    }
+
+    func testConsecutiveEventsAtSizeLimitsDeliverBothSamples() async throws {
+        let payload = #"{"TelemetryForGPUs":[{"percentage_utilization":37,"memory_total_in_mb":100,"memory_available_in_mb":50}]}"#
+        var event = "event: gpu_telemetry\ndata: \(payload)\n"
+        let fullLine = "data:" + String(repeating: " ", count: DashboardClient.maximumLineBytes - 5) + "\n"
+        while event.utf8.count + fullLine.utf8.count + 2 <= DashboardClient.maximumEventBytes {
+            event += fullLine
+        }
+        let padding = DashboardClient.maximumEventBytes - event.utf8.count - 2
+        event += String(repeating: " ", count: padding) + "\n\n"
+
+        let tracker = SampleTracker()
+        try await consumeStream(event + event.replacingOccurrences(of: "\n", with: "\r\n")) { _ in await tracker.received() }
+        let count = await tracker.count
+        XCTAssertEqual(count, 2)
+    }
+
+    private func consumeStream(
+        _ body: String, onSample: @escaping @Sendable (TelemetrySample) async -> Void = { _ in XCTFail("Unexpected sample") }
+    ) async throws {
+        let server = try await DashboardFixture(scenario: .live, streamBody: Data(body.utf8))
+        let session = URLSession(configuration: .ephemeral)
+        defer {
+            session.invalidateAndCancel()
+            server.stop()
+        }
+        try await DashboardClient(baseURL: server.url, session: session).consumeTelemetryStream(
+            token: "simulator-token", onSample: onSample)
+    }
+
     func testSameOriginRedirectsPreserveDashboardRequests() async throws {
         let server = try await DashboardFixture(scenario: .live, redirectLocation: "same-origin")
         let session = URLSession(configuration: .ephemeral)
@@ -60,7 +108,7 @@ final class DashboardBoundaryTests: XCTestCase {
         }
         defer { stream.cancel() }
         let deadline = ContinuousClock.now.advanced(by: .seconds(5))
-        while !(await tracker.hasSample) {
+        while await tracker.count == 0 {
             guard ContinuousClock.now < deadline else { throw BoundaryFixtureError.timeout }
             try await Task.sleep(for: .milliseconds(20))
         }
@@ -135,8 +183,8 @@ final class DashboardBoundaryTests: XCTestCase {
 }
 
 private actor SampleTracker {
-    private(set) var hasSample = false
-    func received() { hasSample = true }
+    private(set) var count = 0
+    func received() { count += 1 }
 }
 
 private enum BoundaryFixtureError: Error { case timeout }

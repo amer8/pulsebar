@@ -30,6 +30,7 @@ final class DashboardFixture: @unchecked Sendable {
     private let redirectStatus: Int
     private let redirectAfterSameOrigin: String?
     private let scenario: Scenario
+    private let streamBody: Data?
     private let listener: NWListener
     private let queue = DispatchQueue(label: "PulseBarTests.DashboardFixture")
     private var startup: CheckedContinuation<Void, Error>?
@@ -39,9 +40,10 @@ final class DashboardFixture: @unchecked Sendable {
 
     init(
         scenario: Scenario, redirectLocation: String? = nil, redirectStatus: Int = 307,
-        redirectAfterSameOrigin: String? = nil
+        redirectAfterSameOrigin: String? = nil, streamBody: Data? = nil
     ) async throws {
         self.scenario = scenario
+        self.streamBody = streamBody
         self.redirectLocation = redirectLocation
         self.redirectStatus = redirectStatus
         self.redirectAfterSameOrigin = redirectAfterSameOrigin
@@ -204,6 +206,12 @@ final class DashboardFixture: @unchecked Sendable {
 
     private func startStream(_ id: UUID) {
         let headers = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n"
+        if let streamBody {
+            connections[id]?.send(
+                content: Data(headers.utf8) + streamBody,
+                completion: .contentProcessed { [weak self] _ in self?.close(id) })
+            return
+        }
         connections[id]?.send(
             content: Data(headers.utf8),
             completion: .contentProcessed { [weak self] error in

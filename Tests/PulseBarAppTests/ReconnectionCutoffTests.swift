@@ -5,6 +5,35 @@ import XCTest
 
 @MainActor
 final class ReconnectionCutoffTests: XCTestCase {
+    func testReleasingModelDuringRetryAndUpdateSleeps() async throws {
+        var retrySleeping = false
+        var updateSleeping = false
+        var model: MetricsViewModel? = MetricsViewModel(
+            dashboard: CutoffDashboard(mode: .failure), sessionStore: CutoffSessionStore(), reconnectPauseStore: makePauseStore(),
+            retrySleep: { @MainActor _ in
+                retrySleeping = true
+                try await Task.sleep(for: .seconds(3600))
+            },
+            updateSleep: { @MainActor _ in
+                updateSleeping = true
+                try await Task.sleep(for: .seconds(3600))
+            })
+        let retainedModel = { [weak model] in model }
+        defer { retainedModel()?.signOut() }
+        try await waitUntil { retrySleeping && updateSleeping }
+        model = nil
+        XCTAssertNil(retainedModel())
+    }
+
+    func testDemoModelDeallocatesBetweenSamples() async throws {
+        var model: MetricsViewModel? = MetricsViewModel(sessionStore: CutoffSessionStore(), demo: true)
+        let retainedModel = { [weak model] in model }
+        defer { retainedModel()?.signOut() }
+        try await waitUntil { model?.connectionHealth.state == .live }
+        model = nil
+        XCTAssertNil(retainedModel())
+    }
+
     func testFailuresPauseAllPollingUntilManualReconnect() async throws {
         let dashboard = CutoffDashboard(mode: .failure)
         let model = MetricsViewModel(
