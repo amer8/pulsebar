@@ -7,6 +7,17 @@ import XCTest
 
 final class MetricsDetailLayoutTests: XCTestCase {
     @MainActor
+    func testPanelOffersUpdateButtonOnlyForConfirmedAvailability() {
+        for status: SystemUpdateStatus in [.available, .staleAvailable, .upToDate, .unknown, .staleUpToDate, .hidden] {
+            var state = TelemetryPanelState(connectionTitle: "Connected")
+            state.systemUpdateStatus = status
+            let panel = TelemetryHistoryPanel(state: state, now: .now, historySeconds: .constant(300), actions: TelemetryPanelActions())
+            XCTAssertEqual(panel.availableUpdateButton != nil, status == .available)
+            XCTAssertEqual(status.statusNote != nil, [.staleAvailable, .unknown, .staleUpToDate].contains(status))
+        }
+    }
+
+    @MainActor
     func testReduceTransparencyMakesPanelBackgroundOpaque() throws {
         func backgroundAlpha(reduceTransparency: Bool) throws -> CGFloat {
             let background = TelemetryPanelBackground(reduceTransparency: reduceTransparency).frame(width: 10, height: 10)
@@ -20,8 +31,17 @@ final class MetricsDetailLayoutTests: XCTestCase {
     @MainActor
     func testSignedOutPanelHasUsableInitialSize() {
         _ = NSApplication.shared
-        let model = MetricsViewModel(sessionStore: PanelSessionStore())
+        let model = MetricsViewModel(sessionStore: PanelSessionStore(), endpoint: .standard)
         defer { model.signOut() }
+        let state = model.panelState(at: .now, historyWindow: .minute)
+        XCTAssertTrue(state.needsSignIn)
+        XCTAssertEqual(state.signInPrompt, "Connect to your device over SSH, then sign in to DGX Dashboard.")
+        let symbol = state.emptyHistorySymbol
+        XCTAssertEqual(symbol, MenuBarDisplay.iconSymbol)
+        for display in MenuBarDisplay.allCases {
+            XCTAssertEqual(model.menuBarPresentation(display: display).connectionSymbol, symbol)
+        }
+        XCTAssertEqual(TelemetryPanelState.expiredSession().emptyHistorySymbol, "chart.xyaxis.line")
         assertUsablePanel(model)
     }
 
@@ -40,7 +60,8 @@ final class MetricsDetailLayoutTests: XCTestCase {
 
     @MainActor
     private func assertUsablePanel(_ model: MetricsViewModel, file: StaticString = #filePath, line: UInt = #line) {
-        let host = NSHostingController(rootView: MetricsDetailView(viewModel: model))
+        let sessions = DeviceSessions(defaults: nil) { _ in model }
+        let host = NSHostingController(rootView: MetricsDetailView(sessions: sessions))
         // Window sizing probes both the ideal size and a compressed opening proposal.
         for proposal in [NSSize.zero, NSSize(width: 400, height: 1), NSSize(width: 400, height: 1000)] {
             let size = host.sizeThatFits(in: proposal)
@@ -57,7 +78,7 @@ final class MetricsDetailLayoutTests: XCTestCase {
             defer { window.close() }
             window.appearance = NSAppearance(named: .darkAqua)
             let view = NSHostingView(
-                rootView: MetricsDetailView(viewModel: model)
+                rootView: MetricsDetailView(sessions: sessions)
                     .background(Color(nsColor: .windowBackgroundColor)).environment(\.colorScheme, .dark))
             window.contentView = view
             view.frame = NSRect(origin: .zero, size: size)
@@ -84,9 +105,9 @@ final class MetricsDetailLayoutTests: XCTestCase {
 @MainActor
 private final class PanelSessionStore: DashboardSessionStoring {
     func loadUsername() -> String { "" }
-    func loadToken() -> String? { nil }
+    func loadToken(allowInteraction: Bool) -> String? { nil }
     func saveUsername(_ username: String) {}
     func saveToken(_ token: String) {}
     func clearUsername() {}
-    func clearToken() {}
+    func clearToken(allowInteraction: Bool) {}
 }

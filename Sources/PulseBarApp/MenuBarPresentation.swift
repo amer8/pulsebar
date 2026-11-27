@@ -4,9 +4,17 @@ struct MenuBarPresentation {
     let state: TelemetryConnectionHealth.State
     let snapshot: MetricsSnapshot
     var display: MenuBarDisplay = .both
-    var updateStatus: SystemUpdateStatus = .hidden
+    var showsAvailableUpdate = false
 
-    var showsWarning: Bool { state == .paused || state == .expired }
+    var connectionSymbol: String? {
+        switch state {
+        case .live: nil
+        case .reconnecting, .connecting: "arrow.clockwise"
+        case .stale, .paused, .expired: "exclamationmark.triangle.fill"
+        case .signedOut: MenuBarDisplay.iconSymbol
+        case .signingIn, .waiting: "hourglass"
+        }
+    }
 
     private var readings: String {
         switch display {
@@ -20,17 +28,23 @@ struct MenuBarPresentation {
     var accessibilityLabel: String {
         let connection: String
         switch state {
-        case .paused: connection = "\(readings). Reconnection paused. Open PulseBar to reconnect."
-        case .expired: connection = "\(readings). Dashboard session expired. Open PulseBar to sign in."
-        default: connection = "\(readings). \(state.rawValue)."
+        case .paused: connection = "Reconnection paused. Open PulseBar to reconnect."
+        case .expired: connection = "Dashboard session expired. Open PulseBar to sign in."
+        case .live: connection = "\(readings). \(state.rawValue)."
+        default: connection = state.rawValue
         }
-        guard let indicator = MenuBarUpdateIndicator(status: updateStatus) else { return connection }
-        return connection + " " + indicator.accessibilityDescription + "."
+        return showsAvailableUpdate ? connection + " DGX system update available." : connection
     }
 
     var fallbackTitle: String {
-        let title = showsWarning ? "⚠ \(readings)" : readings
-        guard let indicator = MenuBarUpdateIndicator(status: updateStatus) else { return title }
-        return title + (indicator.isStale ? " ↓?" : " ↓")
+        let title = state == .live ? readings : state.rawValue
+        return showsAvailableUpdate ? title + " ↓" : title
+    }
+}
+
+extension MetricsViewModel {
+    func menuBarPresentation(display: MenuBarDisplay) -> MenuBarPresentation {
+        MenuBarPresentation(
+            state: connectionHealth.state, snapshot: snapshot, display: display, showsAvailableUpdate: displayedUpdateStatus == .available)
     }
 }

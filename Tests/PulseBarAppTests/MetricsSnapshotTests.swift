@@ -11,11 +11,11 @@ final class MetricsSnapshotTests: XCTestCase {
     }
 
     func testConnectingSnapshotIncludesUsernameInStatusNote() {
-        let snapshot = MetricsSnapshot.connecting(username: "alice")
+        let snapshot = MetricsSnapshot.connecting(username: "alice", host: "lab")
 
         XCTAssertEqual(
             snapshot.gpu.note,
-            "Connecting to local dashboard as alice…"
+            "Connecting to lab as alice…"
         )
     }
 
@@ -155,65 +155,15 @@ final class MetricsSnapshotTests: XCTestCase {
         XCTAssertTrue(availability.available)
     }
 
-    func testNVIDIASyncMonitorMatchesKnownAppIdentifiers() {
-        XCTAssertTrue(
-            NVIDIASyncAppMonitor.matches(
-                bundleIdentifier: nil,
-                localizedName: "NVIDIA Sync",
-                bundleName: nil
-            )
-        )
-        XCTAssertTrue(
-            NVIDIASyncAppMonitor.matches(
-                bundleIdentifier: "com.nvidia.sync",
-                localizedName: nil,
-                bundleName: nil
-            )
-        )
-        XCTAssertTrue(
-            NVIDIASyncAppMonitor.matches(
-                bundleIdentifier: nil,
-                localizedName: nil,
-                bundleName: "NVIDIA Sync.app"
-            )
-        )
-        XCTAssertFalse(
-            NVIDIASyncAppMonitor.matches(
-                bundleIdentifier: "com.example.other",
-                localizedName: "Other App",
-                bundleName: "Other App.app"
-            )
-        )
-    }
-
-    func testDashboardConnectivityMessageMentionsManualSSHTunnelWhenNVIDIASyncIsNotRunning() {
-        let message = DashboardConnectionMessage.message(
-            for: URLError(.cannotConnectToHost),
-            syncAppState: .notRunning
-        )
-
-        XCTAssertEqual(
-            message,
-            "Expose DGX Dashboard at 127.0.0.1:11000 with NVIDIA Sync or a manual SSH tunnel: ssh -L 11000:localhost:11000 <username>@<IP-or-spark-hostname.local>"
-        )
-    }
-
-    func testDashboardConnectivityMessageMentionsDashboardOrManualSSHTunnelWhenNVIDIASyncIsRunning() {
-        let message = DashboardConnectionMessage.message(
-            for: URLError(.cannotConnectToHost),
-            syncAppState: .running
-        )
-
-        XCTAssertEqual(
-            message,
-            "NVIDIA Sync is running. Open DGX Dashboard, or keep a manual SSH tunnel forwarding 127.0.0.1:11000."
-        )
+    func testConnectivityErrorWithNoAliasExplainsHowToConfigureSSH() {
+        let message = DashboardConnectionMessage.message(for: URLError(.cannotConnectToHost), endpoint: .standard)
+        XCTAssertEqual(message, "In Preferences → Devices, choose + Add new to select an SSH alias, or select a device you already added.")
     }
 
     func testDashboardConnectionMessagePreservesNonConnectivityErrors() {
         let message = DashboardConnectionMessage.message(
             for: URLError(.badServerResponse),
-            syncAppState: .notRunning
+            endpoint: .standard
         )
 
         XCTAssertEqual(message, URLError(.badServerResponse).localizedDescription)

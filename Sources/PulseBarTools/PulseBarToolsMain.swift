@@ -744,7 +744,10 @@ private enum ReadmeAssetRenderer {
     static func writeMenuPreview(to url: URL, layout: ReadmePreviewLayout) throws {
         let appIcon = NSImage(contentsOf: url.deletingLastPathComponent().appendingPathComponent("app-icon.png"))
         let reference = Date(timeIntervalSince1970: 1_700_041_260)
-        let state = historySample(at: reference)
+        let selectedDevice = DeviceOption(alias: "dgx-1", status: "Connected", tone: .success, username: "demo")
+        var state = historySample(at: reference, deviceName: selectedDevice.alias)
+        state.devices = [selectedDevice, DeviceOption(alias: "lab-gx10", status: "Connected", tone: .success, username: "lab-user")]
+        state.selectedDevice = selectedDevice.alias
         let panel = try nativeImage(
             TelemetryHistoryPanel(state: state, now: reference, historySeconds: .constant(300), actions: TelemetryPanelActions()),
             size: TelemetryHistoryPanel.preferredSize(for: state), scheme: .dark, transparentBackground: true)
@@ -758,8 +761,8 @@ private enum ReadmeAssetRenderer {
         try image.writePNG(to: url)
     }
 
-    private static func historySample(at reference: Date) -> TelemetryPanelState {
-        var state = TelemetryPanelState(connectionTitle: "Connected")
+    private static func historySample(at reference: Date, deviceName: String = "dgx") -> TelemetryPanelState {
+        var state = TelemetryPanelState(connectionTitle: "Connected", deviceName: deviceName)
         state.isLive = true
         state.canReconnect = true
         state.lastSampleAt = reference
@@ -781,7 +784,7 @@ private enum ReadmeAssetRenderer {
     static func writeHistoryPreviews(to directory: URL) throws {
         let reference = Date(timeIntervalSince1970: 1_700_041_260)
         for scheme: ColorScheme in [.light, .dark] {
-            for name in ["live", "low-use", "full-scale", "reconnecting", "paused", "expired", "signed-out"] {
+            for name in ["live", "low-use", "full-scale", "reconnecting", "paused", "expired", "device-setup", "signed-out", "signing-in"] {
                 var state = historySample(at: reference)
                 switch name {
                 case "low-use", "full-scale":
@@ -805,9 +808,10 @@ private enum ReadmeAssetRenderer {
                     state.totalMemoryGiB = nil
                     state.freeMemoryGiB = nil
                     state.note = "Waiting for the dashboard. Your recent history is preserved."
-                case "signed-out":
+                case "device-setup", "signed-out":
                     state = TelemetryPanelState(connectionTitle: "Signed out")
                     state.needsSignIn = true
+                    state.hasConfiguredDevice = name == "signed-out"
                 case "paused":
                     state.connectionTitle = "Reconnection paused"
                     state.isLive = false
@@ -818,18 +822,13 @@ private enum ReadmeAssetRenderer {
                     state.totalMemoryGiB = nil
                     state.freeMemoryGiB = nil
                     state.recoveryAction = .reconnect
+                    state.note = "No recent telemetry was received."
+                    state.systemUpdateStatus = state.systemUpdateStatus.stale
                 case "expired":
-                    state.connectionTitle = "Session expired"
-                    state.isLive = false
-                    state.needsAttention = true
-                    state.needsSignIn = true
-                    state.canReconnect = false
-                    state.memoryPercent = nil
-                    state.gpuPercent = nil
-                    state.usedMemoryGiB = nil
-                    state.totalMemoryGiB = nil
-                    state.freeMemoryGiB = nil
-                    state.recoveryAction = .signIn
+                    state = .expiredSession()
+                case "signing-in":
+                    state = TelemetryPanelState(connectionTitle: "Signing in…")
+                    state.isAuthenticating = true
                 default: break
                 }
                 let panel = try nativeImage(
@@ -855,7 +854,7 @@ private enum ReadmeAssetRenderer {
     static func writePreferencesPreviews(to directory: URL) async throws {
         var records: [PreferencesPreviewRecord] = []
         for scheme: ColorScheme in [.light, .dark] {
-            for sample in [PreferencesSample.signedIn, .signedOut, .invalidPort] {
+            for sample in PreferencesSample.allCases {
                 let name = "\(sample.rawValue)-\(scheme == .light ? "light" : "dark").png"
                 records.append(
                     try await adaptivePreview(
@@ -875,6 +874,10 @@ private enum ReadmeAssetRenderer {
             try await adaptivePreview(
                 sample: .signedIn, scheme: .dark, visibleFrame: NSRect(x: 0, y: 24, width: 360, height: 900),
                 name: "narrow-screen-dark.png", directory: directory))
+        records.append(
+            try await adaptivePreview(
+                sample: .restoreSession, scheme: .dark, visibleFrame: NSRect(x: 0, y: 24, width: 360, height: 900),
+                name: "narrow-restore-session-dark.png", directory: directory))
         guard let regular = records.first(where: { $0.name == "signed-in-dark.png" }),
             let larger = records.first(where: { $0.name == "large-text-dark.png" }), larger.contentSize.height > regular.contentSize.height
         else { throw ToolError("larger text did not exercise a taller layout") }
@@ -973,34 +976,88 @@ private struct PreferencesPreviewRecord: Encodable {
     let needsScrolling: Bool
 }
 
-private enum PreferencesSample: String {
+enum PreferencesSample: String, CaseIterable {
+    case setup
+    case advanced
+    case addDGX = "add-dgx"
+    case verifyDGX = "verify-dgx"
+    case pending
+    case paused
+    case testing
+    case restoreSession = "restore-session"
+    case signOutFailed = "sign-out-failed"
+    case general
     case signedIn = "signed-in"
     case signedOut = "signed-out"
     case invalidPort = "invalid-port"
 }
 
+extension PreferencesSample {
+    var presentation: DashboardPreferencesState {
+        let signedIn = [.signedIn, .pending, .paused, .signOutFailed].contains(self)
+        let onboarding = [.setup, .advanced, .addDGX, .verifyDGX].contains(self)
+        let alias = self == .restoreSession ? "sync-gx10-research-lab" : "dgx"
+        var state = DashboardPreferencesState(deviceName: onboarding ? nil : alias, accountName: signedIn ? "demo" : nil)
+        state.connectionTitle = signedIn ? "Connected" : "Signed out"
+        state.connectionTone = signedIn ? .success : .neutral
+        state.connectionVerified = !onboarding
+        state.credentialsEntered = false
+        if self == .signedOut { state.feedback = PreferencesFeedback("Connected to dgx over verified SSH.", tone: .success) }
+        if self == .paused {
+            state.connectionTitle = "Reconnection paused"
+            state.connectionTone = .warning
+            state.isPaused = true
+            state.accountNote = PreferencesFeedback("No recent telemetry was received.", tone: .warning)
+        } else if self == .signOutFailed {
+            state.removalFailed = true
+            state.accountNote = PreferencesFeedback(
+                "You are still signed in. PulseBar could not remove the saved token from Keychain.", tone: .error)
+        } else if self == .restoreSession || self == .testing {
+            state.isChecking = self == .testing
+            state.connectionVerified = false
+            state.sessionLoadIssue = .permissionRequired
+        }
+        switch self {
+        case .setup: state.edit = .unconfigured
+        case .advanced:
+            state.setupStep = .chooseAlias
+            state.availableAliases = ["dgx"]
+            state.edit = .pending("dgx · 12000")
+        case .addDGX:
+            state.setupStep = .chooseAlias
+            state.availableAliases = ["studio-gx10", "lab-gx10"]
+            state.edit = .unconfigured
+        case .verifyDGX:
+            state.setupStep = .verify("SHA256:rzkrKqHYhGj2vLkY99Qy5mHkPKj2Pue9HHRDZVTdIjM")
+            state.edit = .pending("dgx · 11000")
+        case .invalidPort: state.edit = .invalid("Port must be between 1 and 65535.")
+        case .pending: state.edit = .pending("dgx · 12000")
+        default: state.edit = .applied
+        }
+        state.devices =
+            onboarding
+            ? []
+            : [
+                DeviceOption(alias: alias, status: state.connectionTitle, tone: state.connectionTone, username: state.accountName),
+                DeviceOption(alias: "lab"),
+            ]
+        return state
+    }
+}
+
 private struct PreferencesSampleView: View {
     let sample: PreferencesSample
     var onContentSizeChange: @MainActor @Sendable (CGSize) -> Void = { _ in }
-    private var state: DashboardPreferencesState {
-        var state = DashboardPreferencesState(endpointAddress: "127.0.0.1:11000", accountName: sample == .signedIn ? "demo" : nil)
-        state.connectionTitle = sample == .signedIn ? "Connected" : "Signed out"
-        state.connectionTone = sample == .signedIn ? .success : .neutral
-        state.canSignIn = true
-        if sample == .invalidPort {
-            state.canApplyPort = true
-            state.canTestConnection = false
-            state.feedback = PreferencesFeedback("Port must be between 1 and 65535.", tone: .error)
-        }
-        return state
-    }
     var body: some View {
+        let state = sample.presentation
         DashboardPreferencesContent(
-            port: .constant(sample == .invalidPort ? "70000" : "11000"), username: .constant("demo"), password: .constant("sample"),
-            state: state, actions: DashboardPreferencesActions(), additionalCardsFirst: true,
-            onContentSizeChange: onContentSizeChange
+            port: .constant(
+                sample == .invalidPort ? "70000" : [.advanced, .pending].contains(sample) ? "12000" : "11000"),
+            sshHost: .constant([.setup, .addDGX].contains(sample) ? "" : state.deviceName ?? "dgx"),
+            username: .constant(state.accountName ?? ""), password: .constant(""),
+            pane: .constant(sample == .general ? .general : .dashboard),
+            state: state, actions: DashboardPreferencesActions(), onContentSizeChange: onContentSizeChange
         ) {
-            WelcomePreferencesContent(isVisible: true, endpointAddress: "127.0.0.1:11000", dismiss: {})
             StartupPreferencesContent(isEnabled: .constant(true), status: "Enabled", openSettings: {})
             MenuBarPreferencesContent(display: .constant(.both))
         }
@@ -1044,9 +1101,9 @@ private struct ReadmeMenuPreview: View {
                     .padding(.bottom, isSocial ? 11 : 20)
             }
             Text("PulseBar").font(.system(size: isSocial ? 24 : 29, weight: .semibold)).tracking(-0.75)
-            Text("DGX telemetry, made simple.")
+            Text("DGX telemetry in your menu bar.")
                 .font(.system(size: isSocial ? 13 : 15, weight: .medium)).padding(.top, 7)
-            Text("Live memory and GPU insights,\nright where you need them.")
+            Text("Monitor multiple devices at once.\nSwitch between their RAM and GPU charts.")
                 .font(.system(size: isSocial ? 11 : 13)).foregroundStyle(.black.opacity(0.68))
                 .fixedSize(horizontal: false, vertical: true).padding(.top, isSocial ? 7 : 11)
             HStack(spacing: 12) {

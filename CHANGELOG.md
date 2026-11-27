@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.3.0 - Unreleased
+
+### Monitor multiple devices
+
+PulseBar now tracks RAM and GPU usage on multiple devices at once. Click the device name at the top of the telemetry panel and choose another device to switch the charts and menu bar readings. Each device keeps collecting its own history while you view another.
+
+### After updating
+
+If you used a local port to connect, open Preferences → Devices. “+ Add new” opens the device picker. Choose a saved SSH alias to start verification, or use “Set up a device in NVIDIA Sync…” if yours is missing. If asked to verify the device, enter the SSH fingerprint from its console or your administrator. Then sign in to DGX Dashboard once to resume telemetry.
+
+### What changed
+
+- Both pickers list only devices added to PulseBar and show the Dashboard username for each signed-in device. PulseBar treats your SSH configuration as read-only. In Preferences → Devices, select a device to manage its account. The Settings section shows the DGX Dashboard port and identifies its default value. Signing out clears only that device’s saved session.
+- PulseBar verifies your device’s SSH host key before sending dashboard credentials. It remembers your sign-in separately for each connection and dashboard port.
+- Saved sessions restore without Keychain prompts at startup. If a device needs permission, choose Restore Saved Session for that device in Preferences → Devices. New Keychain entries show the device name in the permission prompt.
+- To use the dashboard in your browser, choose Open NVIDIA Sync from the telemetry panel’s ⋯ menu, then select your device and open its dashboard.
+- While the selected device reconnects, the menu bar shows its connection status in place of old RAM and GPU readings.
+- The menu bar update icon and the panel’s update banner clear when DGX Dashboard reports no available system updates.
+
 ## 0.2.5 - 2026-11-19
 
 - The menu bar warns you when you need to reconnect or sign in again.

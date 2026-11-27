@@ -37,7 +37,8 @@ final class ReconnectionCutoffTests: XCTestCase {
     func testFailuresPauseAllPollingUntilManualReconnect() async throws {
         let dashboard = CutoffDashboard(mode: .failure)
         let model = MetricsViewModel(
-            dashboard: dashboard, sessionStore: CutoffSessionStore(), reconnectPauseStore: makePauseStore(),
+            dashboard: dashboard, sessionStore: CutoffSessionStore(), endpoint: try DashboardEndpoint(port: 11000, sshHost: "dgx"),
+            reconnectPauseStore: makePauseStore(),
             retrySleep: { _ in await Task.yield() })
         defer { model.signOut() }
 
@@ -46,7 +47,12 @@ final class ReconnectionCutoffTests: XCTestCase {
         let updatesAtCutoff = await dashboard.updateAttempts
         XCTAssertEqual(attemptsAtCutoff, 5)
         XCTAssertTrue(model.isSignedIn)
-        XCTAssertTrue(model.snapshot.gpu.note?.contains("Reconnect") == true)
+        let paused = model.preferencesState(port: "11000", host: "dgx")
+        XCTAssertTrue(paused.isPaused)
+        XCTAssertTrue(paused.canUseProfile)
+        XCTAssertEqual(paused.accountNote?.tone, .warning)
+        XCTAssertTrue(paused.accountNote?.message.contains("Check SSH access to dgx") == true)
+        XCTAssertEqual(model.panelState(at: .now, historyWindow: .fiveMinutes).recoveryAction, .reconnect)
 
         NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.didWakeNotification, object: nil)
         model.checkFreshness(at: .now.addingTimeInterval(60))
@@ -60,6 +66,7 @@ final class ReconnectionCutoffTests: XCTestCase {
         await dashboard.setMode(.healthy)
         model.refresh()
         try await waitUntil { model.connectionHealth.state == .live }
+        XCTAssertFalse(model.preferencesState(port: "11000", host: "dgx").isPaused)
         let resumedAttempts = await dashboard.streamAttempts
         let resumedUpdates = await dashboard.updateAttempts
         XCTAssertEqual(resumedAttempts, attemptsAtCutoff + 1)
@@ -77,6 +84,7 @@ final class ReconnectionCutoffTests: XCTestCase {
             if attempt < 5 { XCTAssertNotEqual(model.connectionHealth.state, .paused) }
         }
         XCTAssertEqual(model.connectionHealth.state, .paused)
+        XCTAssertEqual(model.snapshot.gpu.note, "No recent telemetry was received.")
         let attempts = await dashboard.streamAttempts
         XCTAssertEqual(attempts, 5)
     }
@@ -177,7 +185,7 @@ final class ReconnectionCutoffTests: XCTestCase {
         let endpoint = try DashboardEndpoint(port: 12002)
         pauseStore.setPaused(true, for: endpoint)
         let store = CutoffSessionStore()
-        store.clearToken()
+        store.clearToken(allowInteraction: true)
         let dashboard = CutoffDashboard(mode: .healthy)
         let model = MetricsViewModel(dashboard: dashboard, sessionStore: store, endpoint: endpoint, reconnectPauseStore: pauseStore)
         defer { model.signOut() }
@@ -248,7 +256,7 @@ private final class CutoffSessionStore: DashboardSessionStoring {
     func saveUsername(_ username: String) {}
     func clearUsername() {}
     private var token: String? = "token"
-    func loadToken() -> String? { token }
+    func loadToken(allowInteraction: Bool) -> String? { token }
     func saveToken(_ token: String) { self.token = token }
-    func clearToken() { token = nil }
+    func clearToken(allowInteraction: Bool) { token = nil }
 }

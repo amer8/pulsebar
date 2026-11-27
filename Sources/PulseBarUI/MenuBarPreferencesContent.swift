@@ -6,6 +6,7 @@ public enum MenuBarDisplay: String, CaseIterable, Identifiable {
     case gpu = "GPU"
     case icon = "Icon only"
     public static let preferenceKey = "PulseBar.MenuBarDisplay"
+    public static let iconSymbol = "waveform.path.ecg"
     public var id: String { rawValue }
 }
 

@@ -1,71 +1,32 @@
-import AppKit
 import Foundation
 
-enum NVIDIASyncAppState: Equatable, Sendable {
-    case running
-    case notRunning
-}
-
-struct NVIDIASyncAppMonitor: Sendable {
-    let currentState: @MainActor @Sendable () -> NVIDIASyncAppState
-
-    static let live = NVIDIASyncAppMonitor {
-        NSWorkspace.shared.runningApplications.contains { app in
-            matches(
-                bundleIdentifier: app.bundleIdentifier,
-                localizedName: app.localizedName,
-                bundleName: app.bundleURL?.deletingPathExtension().lastPathComponent
-            )
-        } ? .running : .notRunning
-    }
-
-    static func matches(bundleIdentifier: String?, localizedName: String?, bundleName: String?) -> Bool {
-        [bundleIdentifier, localizedName, bundleName]
-            .compactMap(normalizedIdentifier)
-            .contains { identifier in
-                identifier == "nvidiasync"
-                    || identifier == "nvidiasyncapp"
-                    || identifier.contains("nvidiasync")
-            }
-    }
-
-    private static func normalizedIdentifier(_ value: String?) -> String? {
-        value?
-            .lowercased()
-            .replacingOccurrences(of: " ", with: "")
-            .replacingOccurrences(of: "-", with: "")
-            .replacingOccurrences(of: "_", with: "")
-            .replacingOccurrences(of: ".", with: "")
-    }
-}
-
 enum DashboardConnectionMessage {
-    static func message(for error: Error, syncAppState: NVIDIASyncAppState, endpoint: DashboardEndpoint = .standard) -> String {
-        guard error.isLocalDashboardConnectivityError else {
-            return error.userFacingMessage
-        }
+    static let missingConnection =
+        "In Preferences → Devices, choose + Add new to select an SSH alias, or select a device you already added."
 
-        switch syncAppState {
-        case .running:
-            return "NVIDIA Sync is running. Open DGX Dashboard, or keep a manual SSH tunnel forwarding \(endpoint.address)."
-        case .notRunning:
-            return "Expose DGX Dashboard at \(endpoint.address) with NVIDIA Sync or a manual SSH tunnel: \(endpoint.tunnelCommand)"
-        }
+    static func message(for error: Error, endpoint: DashboardEndpoint) -> String {
+        guard error.isLocalDashboardConnectivityError else { return error.userFacingMessage }
+        guard let host = endpoint.sshHost else { return missingConnection }
+        return "Check SSH access to \(host) and the dashboard at \(endpoint.address) on that host."
     }
 }
 
 enum DashboardError: LocalizedError {
+    case unknownSSHHostKey
     case invalidResponse
     case invalidSessionToken
     case unauthorized
     case loginFailed
     case missingTelemetry
+    case responseTooLarge
     case telemetryLineTooLong
     case telemetryEventTooLarge
     case server(String)
 
     var errorDescription: String? {
         switch self {
+        case .unknownSSHHostKey:
+            return "SSH could not verify the host key. Confirm the fingerprint independently before connecting."
         case .invalidSessionToken:
             return "The dashboard session token is invalid. Sign in again."
         case .invalidResponse:
@@ -76,6 +37,8 @@ enum DashboardError: LocalizedError {
             return "Login failed. Check your dashboard credentials."
         case .missingTelemetry:
             return "The telemetry stream did not include GPU data."
+        case .responseTooLarge:
+            return "The dashboard JSON response exceeded the size limit."
         case .telemetryLineTooLong:
             return "A telemetry stream line exceeded the size limit."
         case .telemetryEventTooLarge:

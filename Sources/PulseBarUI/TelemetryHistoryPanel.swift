@@ -31,9 +31,21 @@ public enum SystemUpdateStatus: Equatable, Sendable {
         case .hidden, .unknown: .unknown
         }
     }
+
+    var statusNote: String? {
+        switch self {
+        case .unknown: "DGX update availability unknown"
+        case .staleAvailable: "Last check found a DGX update. Current status unknown."
+        case .staleUpToDate: "DGX update status stale (previously up to date)"
+        case .available, .upToDate, .hidden: nil
+        }
+    }
 }
 
 public struct TelemetryPanelState {
+    public let headerTitle: String
+    public var devices: [DeviceOption] = []
+    public var selectedDevice: String?
     public var connectionTitle: String
     public var isLive = false
     public var needsAttention = false
@@ -47,16 +59,44 @@ public struct TelemetryPanelState {
     public var freeMemoryGiB: Double?
     public var points: [TelemetryChartPoint] = []
     public var note: String?
+    public var isAuthenticating = false
     public var needsSignIn = false
+    public var needsSessionRestore = false
+    public var hasConfiguredDevice = false
     public var systemUpdateStatus: SystemUpdateStatus = .hidden
 
-    public init(connectionTitle: String) { self.connectionTitle = connectionTitle }
+    public init(connectionTitle: String, deviceName: String? = nil) {
+        self.connectionTitle = connectionTitle
+        headerTitle = deviceName ?? "PulseBar"
+    }
+
+    var emptyHistorySymbol: String {
+        needsSignIn && recoveryAction == nil && !isAuthenticating ? MenuBarDisplay.iconSymbol : "chart.xyaxis.line"
+    }
+
+    var signInPrompt: String {
+        if needsSessionRestore { return "Restore this device’s saved Dashboard session in Preferences." }
+        return hasConfiguredDevice
+            ? "Sign in to DGX Dashboard to view telemetry."
+            : "Connect to your device over SSH, then sign in to DGX Dashboard."
+    }
+
+    public static func expiredSession() -> Self {
+        var state = Self(connectionTitle: "Session expired")
+        state.needsAttention = true
+        state.needsSignIn = true
+        state.recoveryAction = .signIn
+        return state
+    }
 }
 
 public struct TelemetryPanelActions {
+    public var selectDevice: (String) -> Void = { _ in }
+    public var addDevice: () -> Void = {}
     public var reconnect: () -> Void = {}
-    public var openDashboard: () -> Void = {}
+    public var openSync: () -> Void = {}
     public var openPreferences: () -> Void = {}
+    public var openAccountPreferences: (() -> Void)?
     public var quit: () -> Void = {}
     public init() {}
 }
@@ -140,23 +180,9 @@ public struct TelemetryHistoryPanel: View {
                 if let note = state.note, !state.needsSignIn, state.recoveryAction == nil {
                     Text(note).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
-                if state.systemUpdateStatus == .available || state.systemUpdateStatus == .staleAvailable {
-                    Button(action: actions.openDashboard) {
-                        HStack {
-                            Label(
-                                state.systemUpdateStatus == .available
-                                    ? "DGX system update available" : "DGX update previously available (status stale)",
-                                systemImage: "arrow.down.circle")
-                            Spacer()
-                            Image(systemName: "arrow.up.right")
-                        }.font(.caption).foregroundStyle(.orange)
-                    }.buttonStyle(.plain).help("Open the dashboard to review the system update")
-                } else if state.systemUpdateStatus == .unknown || state.systemUpdateStatus == .staleUpToDate {
-                    Label(
-                        state.systemUpdateStatus == .unknown
-                            ? "DGX update availability unknown" : "DGX update status stale (previously up to date)",
-                        systemImage: "questionmark.circle"
-                    ).font(.caption).foregroundStyle(.secondary)
+                availableUpdateButton
+                if let note = state.systemUpdateStatus.statusNote {
+                    Label(note, systemImage: "questionmark.circle").font(.caption).foregroundStyle(.secondary)
                 }
             }
             .padding(16).frame(width: 400)
@@ -166,9 +192,20 @@ public struct TelemetryHistoryPanel: View {
         .background(TelemetryPanelBackground(reduceTransparency: reduceTransparency))
     }
 
+    var availableUpdateButton: (some View)? {
+        let button = Button(action: actions.openSync) {
+            HStack {
+                Label("DGX system update available", systemImage: "arrow.down.circle")
+                Spacer()
+                Image(systemName: "chevron.right")
+            }.font(.caption).foregroundStyle(.orange)
+        }.buttonStyle(.plain).help("Open NVIDIA Sync to review the DGX update")
+        return state.systemUpdateStatus == .available ? button : nil
+    }
+
     private var actionsMenu: some View {
         Menu {
-            Button(action: actions.openDashboard) { Label("Open Dashboard", systemImage: "safari") }
+            Button(action: actions.openSync) { Label("Open NVIDIA Sync", systemImage: "arrow.up.forward.app") }
             if state.canReconnect {
                 Button(action: actions.reconnect) { Label("Reconnect", systemImage: "arrow.clockwise") }
             }
@@ -193,7 +230,7 @@ public struct TelemetryHistoryPanel: View {
         }
         .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
         .foregroundStyle(.secondary)
-        .help("Dashboard, preferences, about, bug reporting, and quit").accessibilityLabel("PulseBar actions")
+        .help("Browser access, connection, preferences, and app actions").accessibilityLabel("PulseBar actions")
         .popover(isPresented: $isShowingAbout, arrowEdge: .top) {
             PulseBarAboutContent().onExitCommand { isShowingAbout = false }
         }
@@ -219,7 +256,7 @@ public struct TelemetryHistoryPanel: View {
                 Button("Reconnect", action: actions.reconnect)
                     .buttonStyle(.borderedProminent).controlSize(.small)
             } else {
-                Button("Sign In…", action: actions.openPreferences)
+                Button("Sign In…", action: actions.openAccountPreferences ?? actions.openPreferences)
                     .buttonStyle(.borderedProminent).controlSize(.small)
             }
         }
@@ -227,7 +264,6 @@ public struct TelemetryHistoryPanel: View {
         .background(.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
     }
 
-    private var connectionColor: Color { state.isLive ? .green : (state.needsAttention ? .orange : .secondary) }
     private var sampleAge: String {
         guard let date = state.lastSampleAt else { return "" }
         let seconds = max(0, Int(now.timeIntervalSince(date)))
@@ -236,22 +272,29 @@ public struct TelemetryHistoryPanel: View {
     private var connectionDescription: String {
         state.connectionTitle + (state.lastSampleAt == nil ? "" : " · " + sampleAge)
     }
-    private var memoryDetail: String {
-        guard let used = state.usedMemoryGiB, let total = state.totalMemoryGiB else { return "Waiting for readings" }
+    private var missingReadingDetail: String? {
+        state.needsSignIn || state.isAuthenticating || state.recoveryAction == .reconnect ? nil : "Waiting for readings"
+    }
+    private var memoryDetail: String? {
+        guard let used = state.usedMemoryGiB, let total = state.totalMemoryGiB else { return missingReadingDetail }
         let usage = "\(number(used)) / \(number(total, digits: 0)) GiB used"
         guard let free = state.freeMemoryGiB else { return usage }
         return usage + " · \(number(free)) GiB available"
     }
-    private var gpuDetail: String { state.gpuPercent == nil ? "Waiting for readings" : "Graphics utilization" }
+    private var gpuDetail: String? { state.gpuPercent == nil ? missingReadingDetail : "Graphics utilization" }
+
+    var devicePicker: DevicePicker {
+        let title = state.devices.count > 1 ? state.selectedDevice ?? state.headerTitle : state.headerTitle
+        let header = DeviceOption(
+            alias: title, status: connectionDescription, tone: state.isLive ? .success : (state.needsAttention ? .warning : .neutral))
+        return DevicePicker(
+            devices: state.devices, selection: Binding(get: { state.selectedDevice ?? "" }, set: { actions.selectDevice($0) }),
+            label: "Displayed device", header: header, addDevice: actions.addDevice)
+    }
 
     private var historyControls: some View {
         HStack(spacing: 8) {
-            Text("PulseBar")
-                .font(.system(size: 12, weight: .semibold))
-            Circle().fill(connectionColor).frame(width: 6, height: 6)
-                .help(connectionDescription)
-                .accessibilityLabel("Connection status")
-                .accessibilityValue(connectionDescription)
+            devicePicker.font(.system(size: 12, weight: .semibold)).layoutPriority(-1)
             Spacer(minLength: 8)
             Button {
                 switch historySeconds {
@@ -285,7 +328,7 @@ public struct TelemetryHistoryPanel: View {
         }
     }
 
-    private func readingHeader(_ title: String, symbol: String, value: Double?, peak: Double?, detail: String) -> some View {
+    private func readingHeader(_ title: String, symbol: String, value: Double?, peak: Double?, detail: String?) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Label(title, systemImage: symbol).font(.subheadline.weight(.medium))
@@ -293,12 +336,12 @@ public struct TelemetryHistoryPanel: View {
                 Spacer()
                 if let peak { Text("Peak \(percent(peak))").font(.caption).foregroundStyle(.secondary).monospacedDigit() }
             }
-            Text(detail).font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            if let detail { Text(detail).font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
         }
     }
 
     private func metricSeries(
-        _ title: String, symbol: String, value: Double?, values: [Double], detail: String,
+        _ title: String, symbol: String, value: Double?, values: [Double], detail: String?,
         keyPath: KeyPath<TelemetryChartPoint, Double>, color: Color
     ) -> some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -319,12 +362,20 @@ public struct TelemetryHistoryPanel: View {
 
     private var emptyHistory: some View {
         VStack(spacing: 8) {
-            Image(systemName: "chart.xyaxis.line").font(.title2).foregroundStyle(.tertiary)
-            Text(state.needsSignIn ? "Connect your dashboard" : "Waiting for telemetry").font(.subheadline.weight(.medium))
-            if state.needsSignIn && state.recoveryAction == nil {
-                Text("Sign in to start collecting live telemetry.").font(.caption).foregroundStyle(.secondary)
-                Button("Open Preferences…", action: actions.openPreferences).buttonStyle(.borderedProminent).controlSize(.small)
-            } else if !state.needsSignIn {
+            Image(systemName: state.emptyHistorySymbol).font(.title2).foregroundStyle(.tertiary)
+            if state.isAuthenticating {
+                Text("Signing in…").font(.subheadline.weight(.medium))
+            } else if state.recoveryAction == .signIn {
+                Text("No session history").font(.subheadline.weight(.medium))
+            } else if state.recoveryAction == .reconnect {
+                Text("No recent history").font(.subheadline.weight(.medium))
+            } else if state.needsSignIn {
+                Text(state.signInPrompt).font(.subheadline.weight(.medium)).multilineTextAlignment(.center)
+                Button("Open Preferences…", action: actions.openAccountPreferences ?? actions.openPreferences).buttonStyle(
+                    .borderedProminent
+                ).controlSize(.small)
+            } else {
+                Text("Waiting for telemetry").font(.subheadline.weight(.medium))
                 Text("Your history will appear as samples arrive.").font(.caption).foregroundStyle(.secondary)
             }
         }.frame(maxWidth: .infinity).frame(height: 154)
@@ -377,7 +428,7 @@ private struct TelemetryMetricChart: View {
         .chartYAxis {
             AxisMarks(position: .leading, values: [0, upperBound / 2, upperBound]) { value in
                 AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
-                AxisValueLabel {
+                AxisValueLabel(anchor: .trailing) {
                     if let percent = value.as(Double.self) {
                         Text("\(number(percent, digits: 1))%").font(.system(size: 10))
                             .lineLimit(1).fixedSize(horizontal: true, vertical: false).frame(width: 40, alignment: .trailing)

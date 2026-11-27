@@ -23,10 +23,10 @@ body:
     id: connection-method
     attributes:
       label: Connection method
-      description: How does PulseBar connect to the DGX Dashboard?
+      description: Which connection is affected?
       options:
-        - NVIDIA Sync
-        - Manual SSH tunnel
+        - PulseBar telemetry over SSH
+        - Browser access through NVIDIA Sync
         - Other
         - Not applicable
     validations:

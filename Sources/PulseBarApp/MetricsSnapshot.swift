@@ -21,8 +21,9 @@ struct MetricsSnapshot {
         )
     }
 
-    static func connecting(username: String) -> MetricsSnapshot {
-        let prefix = username.isEmpty ? "Connecting to local dashboard…" : "Connecting to local dashboard as \(username)…"
+    static func connecting(username: String, host: String? = nil) -> MetricsSnapshot {
+        let destination = host ?? "the dashboard"
+        let prefix = username.isEmpty ? "Connecting to \(destination)…" : "Connecting to \(destination) as \(username)…"
 
         return MetricsSnapshot(
             memory: MemorySnapshot(statusText: "Connecting…"),

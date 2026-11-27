@@ -42,6 +42,7 @@ let package = Package(
         .executableTarget(
             name: "PulseBarApp",
             dependencies: [
+                "LoginKeychain",
                 "PulseBarUI",
                 .product(name: "Sparkle", package: "Sparkle"),
             ],
@@ -62,6 +63,7 @@ let package = Package(
             path: "Sources/PulseBarTools"
         ),
         .target(name: "PulseBarUI", path: "Sources/PulseBarUI"),
+        .target(name: "LoginKeychain"),
         .testTarget(
             name: "PulseBarAppTests",
             dependencies: ["PulseBarApp", "PulseBarUI", "PulseBarTools"],

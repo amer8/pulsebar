@@ -36,30 +36,3 @@ public struct StartupPreferencesContent: View {
         }
     }
 }
-
-public struct WelcomePreferencesContent: View {
-    private let isVisible: Bool
-    private let endpointAddress: String
-    private let dismiss: () -> Void
-
-    public init(isVisible: Bool, endpointAddress: String, dismiss: @escaping () -> Void) {
-        self.isVisible = isVisible
-        self.endpointAddress = endpointAddress
-        self.dismiss = dismiss
-    }
-
-    public var body: some View {
-        if isVisible {
-            DashboardPreferencesCard {
-                Label("Welcome to PulseBar", systemImage: "waveform.path.ecg").fontWeight(.semibold)
-                Text("Connect your DGX Dashboard at \(endpointAddress) using NVIDIA Sync or an SSH tunnel, then sign in below.")
-                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                HStack {
-                    Label("Session stored securely in Keychain", systemImage: "lock").font(.caption).foregroundStyle(.secondary)
-                    Spacer()
-                    Button("Got It", action: dismiss)
-                }
-            }
-        }
-    }
-}

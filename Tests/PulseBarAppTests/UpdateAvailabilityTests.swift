@@ -6,20 +6,9 @@ import XCTest
 
 @MainActor
 final class UpdateAvailabilityTests: XCTestCase {
-    func testMenuBarIndicatorDistinguishesAvailableAndStaleResults() throws {
-        let available = try XCTUnwrap(MenuBarUpdateIndicator(status: .available))
-        XCTAssertFalse(available.isStale)
-        XCTAssertEqual(available.accessibilityDescription, "DGX system update available")
-        let stale = try XCTUnwrap(MenuBarUpdateIndicator(status: .staleAvailable))
-        XCTAssertTrue(stale.isStale)
-        XCTAssertEqual(stale.accessibilityDescription, "DGX system update previously available, status stale")
-        for status: SystemUpdateStatus in [.hidden, .unknown, .upToDate, .staleUpToDate] {
-            XCTAssertNil(MenuBarUpdateIndicator(status: status))
-        }
-    }
-
     func testSuccessFailureAndRetryRecovery() async throws {
-        let dashboard = UpdateDashboard()
+        let dashboard = UpdateDashboard(
+            initialSample: TelemetrySample(gpuUtilizationPercent: 40, memoryTotalMB: 100, memoryAvailableMB: 50))
         let sleep = UpdateSleep()
         let store = UpdateSessionStore()
         let model = makeModel(dashboard, sleep, store)
@@ -29,15 +18,20 @@ final class UpdateAvailabilityTests: XCTestCase {
         try await waitUntil { await dashboard.tokens.count == 1 }
         await dashboard.complete(0, .success(UpdateAvailability(available: true)))
         try await waitUntil { await sleep.durations.count == 1 }
+        try await waitUntil { model.connectionHealth.state == .live }
         XCTAssertEqual(model.updateStatus, .available)
+        XCTAssertTrue(model.menuBarPresentation(display: .both).showsAvailableUpdate)
+        XCTAssertEqual(model.panelState(at: .now, historyWindow: .minute).systemUpdateStatus, .available)
         let firstDelay = await sleep.durations[0]
-        XCTAssertEqual(firstDelay, .seconds(3600))
+        XCTAssertEqual(firstDelay, .seconds(30))
 
         await sleep.resume(0)
         try await waitUntil { await dashboard.tokens.count == 2 }
         await dashboard.complete(1, .failure(URLError(.networkConnectionLost)))
         try await waitUntil { await sleep.durations.count == 2 }
         XCTAssertEqual(model.updateStatus, .staleAvailable)
+        XCTAssertFalse(model.menuBarPresentation(display: .both).showsAvailableUpdate)
+        XCTAssertEqual(model.panelState(at: .now, historyWindow: .minute).systemUpdateStatus, .staleAvailable)
         XCTAssertTrue(model.isSignedIn)
         let retryDelay = await sleep.durations[1]
         XCTAssertEqual(retryDelay, .seconds(30))
@@ -47,6 +41,8 @@ final class UpdateAvailabilityTests: XCTestCase {
         await dashboard.complete(2, .success(UpdateAvailability(available: false)))
         try await waitUntil { await sleep.durations.count == 3 }
         XCTAssertEqual(model.updateStatus, .upToDate)
+        XCTAssertFalse(model.menuBarPresentation(display: .both).showsAvailableUpdate)
+        XCTAssertEqual(model.panelState(at: .now, historyWindow: .minute).systemUpdateStatus, .upToDate)
         let recoveredDelay = await sleep.durations[2]
         XCTAssertEqual(recoveredDelay, .seconds(3600))
         await sleep.resume(2)
@@ -55,6 +51,39 @@ final class UpdateAvailabilityTests: XCTestCase {
         try await waitUntil { await sleep.durations.count == 4 }
         XCTAssertEqual(model.updateStatus, .staleUpToDate)
         await sleep.resume(3)
+    }
+
+    func testStaleStreamRecoveryRejectsLatePreUpdateResult() async throws {
+        let dashboard = UpdateDashboard(
+            initialSample: TelemetrySample(gpuUtilizationPercent: 40, memoryTotalMB: 100, memoryAvailableMB: 50))
+        let sleep = UpdateSleep()
+        let model = makeModel(dashboard, sleep, UpdateSessionStore())
+        defer { model.signOut() }
+
+        try await waitUntil { model.connectionHealth.state == .live }
+        try await waitUntil { await dashboard.tokens.count == 1 }
+        await dashboard.complete(0, .success(UpdateAvailability(available: true)))
+        try await waitUntil { await sleep.durations.count == 1 }
+        await sleep.resume(0)
+        try await waitUntil { await dashboard.tokens.count == 2 }
+        let oldCheck = try XCTUnwrap(model.updateAvailabilityTask)
+
+        model.checkFreshness(at: .now.addingTimeInterval(31))
+        XCTAssertEqual(model.connectionHealth.state, .stale)
+        XCTAssertEqual(model.panelState(at: .now, historyWindow: .minute).systemUpdateStatus, .staleAvailable)
+        XCTAssertFalse(model.menuBarPresentation(display: .both).showsAvailableUpdate)
+        try await waitUntil { await dashboard.tokens.count == 3 }
+        XCTAssertEqual(model.connectionHealth.state, .live)
+        XCTAssertFalse(model.menuBarPresentation(display: .both).showsAvailableUpdate)
+
+        await dashboard.complete(2, .success(UpdateAvailability(available: false)))
+        try await waitUntil { await sleep.durations.count == 2 }
+        await dashboard.complete(1, .success(UpdateAvailability(available: true)))
+        await oldCheck.value
+        XCTAssertFalse(model.menuBarPresentation(display: .both).showsAvailableUpdate)
+        XCTAssertEqual(model.panelState(at: .now, historyWindow: .minute).systemUpdateStatus, .upToDate)
+        model.signOut()
+        await sleep.resume(1)
     }
 
     func testInitialFailureIsUnknownAndRetries() async throws {
@@ -94,17 +123,30 @@ final class UpdateAvailabilityTests: XCTestCase {
     }
 
     func testUnauthorizedExpiresSessionAndClearsSavedCredentials() async throws {
-        let dashboard = UpdateDashboard()
+        let dashboard = UpdateDashboard(
+            initialSample: TelemetrySample(gpuUtilizationPercent: 40, memoryTotalMB: 100, memoryAvailableMB: 50))
         let sleep = UpdateSleep()
         let store = UpdateSessionStore()
         let model = makeModel(dashboard, sleep, store)
         try await waitUntil { await dashboard.tokens.count == 1 }
+        try await waitUntil { !model.history.samples.isEmpty }
         await dashboard.complete(0, .failure(DashboardError.unauthorized))
         try await waitUntil { !model.isSignedIn }
+        XCTAssertTrue(model.history.samples.isEmpty)
         XCTAssertNil(store.token)
+        XCTAssertEqual(store.deleteInteractions, [false])
         XCTAssertEqual(store.username, "")
         XCTAssertEqual(model.updateStatus, .unknown)
         XCTAssertEqual(model.snapshot.gpu.note, "Your dashboard session expired. Sign in again.")
+        let panel = model.panelState(at: .now, historyWindow: .fiveMinutes)
+        XCTAssertTrue(panel.points.isEmpty)
+        XCTAssertNil(panel.lastSampleAt)
+        XCTAssertNil(panel.memoryPercent)
+        XCTAssertNil(panel.gpuPercent)
+        XCTAssertEqual(panel.systemUpdateStatus, .hidden)
+        XCTAssertEqual(panel.recoveryAction, .signIn)
+        XCTAssertTrue(panel.needsSignIn)
+        XCTAssertFalse(panel.canReconnect)
         let delays = await sleep.durations
         XCTAssertTrue(delays.isEmpty)
     }
@@ -178,6 +220,8 @@ final class UpdateAvailabilityTests: XCTestCase {
 private enum UpdateTestError: Error { case timeout }
 
 private actor UpdateDashboard: DashboardServing {
+    let initialSample: TelemetrySample?
+    init(initialSample: TelemetrySample? = nil) { self.initialSample = initialSample }
     private(set) var tokens: [String] = []
     private(set) var streamCancelled = false
     private var pending: [Int: CheckedContinuation<UpdateAvailability, Error>] = [:]
@@ -196,6 +240,7 @@ private actor UpdateDashboard: DashboardServing {
         onStatus: @escaping @Sendable (TelemetryStreamStatus) async -> Void, onSample: @escaping @Sendable (TelemetrySample) async -> Void
     ) async throws {
         await onStatus(.connected)
+        if let initialSample { await onSample(initialSample) }
         defer { streamCancelled = Task.isCancelled }
         try await Task.sleep(for: .seconds(3600))
     }
@@ -217,10 +262,14 @@ private actor UpdateSleep {
 private final class UpdateSessionStore: DashboardSessionStoring {
     var username = "user"
     var token: String? = "token"
+    var deleteInteractions: [Bool] = []
     func loadUsername() -> String { username }
     func saveUsername(_ username: String) { self.username = username }
     func clearUsername() { username = "" }
-    func loadToken() -> String? { token }
+    func loadToken(allowInteraction: Bool) -> String? { token }
     func saveToken(_ token: String) { self.token = token }
-    func clearToken() { token = nil }
+    func clearToken(allowInteraction: Bool) {
+        deleteInteractions.append(allowInteraction)
+        token = nil
+    }
 }

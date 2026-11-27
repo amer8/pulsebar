@@ -5,7 +5,7 @@ import PulseBarUI
 import SwiftUI
 
 private let updateAvailabilityPollInterval: Duration = .seconds(3_600)
-private let updateAvailabilityRetryInterval: Duration = .seconds(30)
+private let updateAvailabilityRecheckInterval: Duration = .seconds(30)
 private let maximumTelemetryFailures = 5
 
 @MainActor
@@ -16,19 +16,19 @@ final class MetricsViewModel: ObservableObject {
         didSet { if snapshot.gpu.utilizationPercent == nil { history.markGap() } }
     }
     @Published private(set) var updateStatus: SystemUpdateStatus = .unknown
-    @Published private(set) var endpoint = DashboardEndpoint.current
+    let endpoint: DashboardEndpoint
     @Published var username: String
     @Published var password = ""
     @Published private(set) var isAuthenticating = false
+    @Published private(set) var lastSignInFailed = false
     @Published private(set) var sessionRemovalError: String?
-    @Published private(set) var sessionLoadError: String?
+    @Published private(set) var sessionLoadIssue: SavedSessionLoadIssue?
 
-    private var dashboard: any DashboardServing
-    private let syncAppMonitor: NVIDIASyncAppMonitor
+    private let dashboard: any DashboardServing
     private let retrySleep: @Sendable (Duration) async throws -> Void
     private let updateSleep: @Sendable (Duration) async throws -> Void
     private let reconnectPauseStore: DashboardReconnectPauseStore
-    private var sessionStore: any DashboardSessionStoring
+    private let sessionStore: any DashboardSessionStoring
     private let logger = Logger(subsystem: "PulseBar", category: "Dashboard")
     private var healthTask: Task<Void, Never>?
     private var wakeTask: Task<Void, Never>?
@@ -45,6 +45,15 @@ final class MetricsViewModel: ObservableObject {
         authToken != nil
     }
 
+    var signedInUsername: String? {
+        isSignedIn && !username.isEmpty ? username : nil
+    }
+
+    var displayedUpdateStatus: SystemUpdateStatus {
+        guard isSignedIn else { return .hidden }
+        return connectionHealth.state == .live ? updateStatus : updateStatus.stale
+    }
+
     var telemetryPanelNote: String? {
         if let name = connectionHealth.unrecognizedEventName {
             return "The dashboard sent an unrecognized event ‘\(name)’. PulseBar expects ‘gpu_telemetry’."
@@ -57,7 +66,6 @@ final class MetricsViewModel: ObservableObject {
     }
 
     init(
-        syncAppMonitor: NVIDIASyncAppMonitor = .live,
         dashboard: (any DashboardServing)? = nil,
         sessionStore: (any DashboardSessionStoring)? = nil,
         demo: Bool = false,
@@ -67,38 +75,38 @@ final class MetricsViewModel: ObservableObject {
         updateSleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
     ) {
         let endpoint = endpoint ?? DashboardEndpoint.current
-        let dashboard = dashboard ?? DashboardClient(baseURL: endpoint.url)
+        let dashboard = dashboard ?? DashboardClient(endpoint: endpoint)
         let sessionStore = sessionStore ?? DashboardSessionStore(endpoint: endpoint)
         let username = demo ? "Demo" : sessionStore.loadUsername()
         var authToken: String?
-        var loadError: String?
+        var loadIssue: SavedSessionLoadIssue?
         if !demo {
             do {
-                authToken = try sessionStore.loadToken()
+                authToken = try sessionStore.loadToken(allowInteraction: false)
                 if let authToken { try DashboardSessionToken.validate(authToken) }
             } catch {
                 authToken = nil
-                loadError = error.userFacingMessage
+                loadIssue =
+                    (error as? SessionStoreError)?.needsReadPermission == true ? .permissionRequired : .failure(error.userFacingMessage)
             }
         }
 
         self.dashboard = dashboard
-        self.syncAppMonitor = syncAppMonitor
         self.retrySleep = retrySleep
         self.updateSleep = updateSleep
         self.reconnectPauseStore = reconnectPauseStore
         self.sessionStore = sessionStore
         self.authToken = authToken
-        self.sessionLoadError = loadError
+        self.sessionLoadIssue = loadIssue
         self.endpoint = endpoint
 
         if authToken != nil {
             self.username = username
-            self.snapshot = .connecting(username: username)
+            self.snapshot = .connecting(username: username, host: endpoint.sshHost)
         } else {
-            self.username = loadError == nil ? "" : username
+            self.username = loadIssue == nil ? "" : username
             self.snapshot = .signedOut()
-            if !demo && loadError == nil { sessionStore.clearUsername() }
+            if !demo && loadIssue == nil { sessionStore.clearUsername() }
         }
 
         if demo {
@@ -109,6 +117,8 @@ final class MetricsViewModel: ObservableObject {
         if let authToken {
             log("Loaded saved dashboard session for '\(username)'.")
             startSessionPollingIfAllowed(using: authToken)
+        } else if loadIssue != nil {
+            log("Could not restore the saved dashboard session.")
         } else {
             log("No saved dashboard session found.")
         }
@@ -126,7 +136,7 @@ final class MetricsViewModel: ObservableObject {
         wakeTask = Task { [weak self] in
             for await _ in NSWorkspace.shared.notificationCenter.notifications(named: NSWorkspace.didWakeNotification) {
                 guard !Task.isCancelled else { return }
-                guard let self, self.connectionHealth.state != .paused else { continue }
+                guard let self, self.authToken != nil, self.connectionHealth.state != .paused else { continue }
                 self.reconnect(resetFailures: false)
             }
         }
@@ -135,7 +145,7 @@ final class MetricsViewModel: ObservableObject {
     func checkFreshness(at date: Date) {
         guard let authToken, connectionHealth.markStale(at: date) else { return }
         snapshot = snapshot.replacingTelemetryUnavailable(note: "Telemetry is stale. Reconnecting…", statusText: "Stale", timestamp: date)
-        guard recordStreamFailure() else { return }
+        guard recordStreamFailure(reason: "No recent telemetry was received.") else { return }
         startStream(using: authToken)
     }
 
@@ -156,6 +166,9 @@ final class MetricsViewModel: ObservableObject {
     private func receiveSample(_ sample: TelemetrySample) {
         guard TelemetryHistory.accepts(sample) else { return }
         history.append(sample, at: .now)
+        if retryFailures > 0, let authToken {
+            startUpdateAvailabilityChecks(using: authToken)
+        }
         retryFailures = 0
         connectionHealth.sampleReceived(at: .now)
         snapshot = .live(sample)
@@ -175,7 +188,7 @@ final class MetricsViewModel: ObservableObject {
 
     private func reconnect(resetFailures: Bool) {
         guard let authToken else {
-            snapshot = .signedOut(note: "Sign in to the local dashboard to stream metrics.")
+            snapshot = .signedOut(note: "Sign in to your DGX dashboard to stream metrics.")
             return
         }
 
@@ -189,7 +202,7 @@ final class MetricsViewModel: ObservableObject {
         }
         connectionHealth.reconnecting()
         snapshot = snapshot.replacingTelemetryUnavailable(
-            note: "Reconnecting to the local dashboard…",
+            note: "Reconnecting to \(endpoint.sshHost ?? "the dashboard")…",
             statusText: "Reconnecting…",
             timestamp: .now
         )
@@ -198,7 +211,8 @@ final class MetricsViewModel: ObservableObject {
     }
 
     @discardableResult
-    func signIn() -> Task<Void, Never>? {
+    func signIn(portText: String? = nil, sshHost: String? = nil) -> Task<Void, Never>? {
+        if let portText, !endpoint.matches(portText: portText, sshHost: sshHost) { return nil }
         guard !isAuthenticating else { return nil }
         let trimmedUsername = username.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedUsername.isEmpty, !password.isEmpty else {
@@ -209,9 +223,10 @@ final class MetricsViewModel: ObservableObject {
         let authenticationID = UUID()
         retryFailures = 0
         activeAuthenticationID = authenticationID
-        connectionHealth.beginConnection()
+        connectionHealth.beginConnection(signingIn: true)
+        lastSignInFailed = false
         isAuthenticating = true
-        snapshot = .connecting(username: trimmedUsername)
+        snapshot = .connecting(username: trimmedUsername, host: self.endpoint.sshHost)
         streamTask?.cancel()
         updateAvailabilityTask?.cancel()
         activeTelemetryStreamID = nil
@@ -237,11 +252,11 @@ final class MetricsViewModel: ObservableObject {
                 try self.sessionStore.saveToken(token)
                 self.sessionStore.saveUsername(trimmedUsername)
                 self.sessionRemovalError = nil
-                self.sessionLoadError = nil
+                self.sessionLoadIssue = nil
                 self.password = ""
                 self.username = trimmedUsername
                 self.authToken = token
-                self.snapshot = .connecting(username: trimmedUsername)
+                self.snapshot = .connecting(username: trimmedUsername, host: self.endpoint.sshHost)
                 self.log("Login succeeded. Saved token to Keychain.")
                 self.startSessionPollingIfAllowed(using: token)
             } catch {
@@ -254,6 +269,7 @@ final class MetricsViewModel: ObservableObject {
                 self.activeUpdateAvailabilityTaskID = nil
                 self.updateStatus = .unknown
                 self.connectionHealth = TelemetryConnectionHealth()
+                self.lastSignInFailed = !(error is CancellationError)
                 self.snapshot = .signedOut(note: message)
                 self.log("Sign-in failed: \(message)")
             }
@@ -267,8 +283,9 @@ final class MetricsViewModel: ObservableObject {
         activeAuthenticationID = nil
         isAuthenticating = false
         password = ""
-        guard removeSavedSession() else { return }
-        sessionLoadError = nil
+        guard removeSavedSession(allowInteraction: true) else { return }
+        lastSignInFailed = false
+        sessionLoadIssue = nil
         streamTask?.cancel()
         updateAvailabilityTask?.cancel()
         streamTask = nil
@@ -282,70 +299,53 @@ final class MetricsViewModel: ObservableObject {
         updateStatus = .unknown
         connectionHealth = TelemetryConnectionHealth()
         history = TelemetryHistory()
-        snapshot = .signedOut(note: "Signed out. Sign in again to resume metrics.")
+        snapshot = .signedOut(note: "Signed out. PulseBar cleared this device’s saved session from Keychain.")
         log("Signed out and cleared saved username and token.")
     }
 
-    func configureEndpoint(_ target: DashboardEndpoint) {
-        guard target != endpoint, !isAuthenticating, sessionRemovalError == nil else { return }
+    // Retire a replaced port without signing out or deleting that endpoint’s Keychain entry.
+    func stopMonitoring() {
+        authenticationTask?.cancel()
+        activeAuthenticationID = nil
         streamTask?.cancel()
-        updateAvailabilityTask?.cancel()
         activeTelemetryStreamID = nil
+        updateAvailabilityTask?.cancel()
         activeUpdateAvailabilityTaskID = nil
-        endpoint = target
-        target.save()
-        dashboard = DashboardClient(baseURL: target.url)
-        sessionStore = DashboardSessionStore(endpoint: target)
-        authToken = nil
-        username = sessionStore.loadUsername()
-        sessionLoadError = nil
-        do {
-            authToken = try sessionStore.loadToken()
-            if let authToken { try DashboardSessionToken.validate(authToken) }
-        } catch {
-            authToken = nil
-            sessionLoadError = error.userFacingMessage
-        }
-        password = ""
-        updateStatus = .unknown
-        retryFailures = 0
-        history = TelemetryHistory()
-        connectionHealth = TelemetryConnectionHealth()
-        snapshot = authToken == nil ? .signedOut() : .connecting(username: username)
-        if let authToken {
-            startSessionPollingIfAllowed(using: authToken)
-        }
+        healthTask?.cancel()
+        wakeTask?.cancel()
     }
 
-    func testConnection() async -> String {
+    func testConnection() async -> PreferencesFeedback {
         let target = endpoint
         do {
             guard try await dashboard.checkConnection() else {
-                return "A service responded, but the dashboard page was unavailable."
+                return PreferencesFeedback("SSH connected, but the dashboard page was unavailable on port \(target.port).", tone: .warning)
             }
-            return "Dashboard page is reachable at \(target.address). Sign in to verify telemetry."
-        } catch { return DashboardConnectionMessage.message(for: error, syncAppState: syncAppMonitor.currentState(), endpoint: target) }
+            return PreferencesFeedback(
+                "Dashboard reachable over SSH on \(target.sshHost ?? "the configured host"), port \(target.port).", tone: .success)
+        } catch { return PreferencesFeedback(DashboardConnectionMessage.message(for: error, endpoint: target), tone: .error) }
     }
 
     func retrySavedSession() {
         guard !isAuthenticating, authToken == nil, sessionRemovalError == nil else { return }
+        lastSignInFailed = false
         do {
-            guard let token = try sessionStore.loadToken() else {
-                sessionLoadError = nil
+            guard let token = try sessionStore.loadToken(allowInteraction: true) else {
+                sessionLoadIssue = nil
                 username = ""
                 sessionStore.clearUsername()
                 snapshot = .signedOut()
                 return
             }
             try DashboardSessionToken.validate(token)
-            sessionLoadError = nil
+            sessionLoadIssue = nil
             username = sessionStore.loadUsername()
             authToken = token
             retryFailures = 0
-            snapshot = .connecting(username: username)
+            snapshot = .connecting(username: username, host: endpoint.sshHost)
             startSessionPollingIfAllowed(using: token)
         } catch {
-            sessionLoadError = error.userFacingMessage
+            sessionLoadIssue = .failure(error.userFacingMessage)
         }
     }
 
@@ -363,10 +363,10 @@ final class MetricsViewModel: ObservableObject {
         startUpdateAvailabilityChecks(using: token)
     }
 
-    private func showPausedState() {
+    private func showPausedState(reason: String? = nil) {
         connectionHealth.pause()
         snapshot = snapshot.replacingTelemetryUnavailable(
-            note: "Automatic reconnection paused after repeated failures. Choose Reconnect to try again.",
+            note: reason ?? "Automatic reconnection paused after repeated failures.",
             statusText: "Reconnection paused",
             timestamp: .now
         )
@@ -374,7 +374,7 @@ final class MetricsViewModel: ObservableObject {
 
     // Stop all authenticated polling once telemetry has failed repeatedly. A fresh
     // sample or an explicit reconnect starts a new failure streak.
-    private func recordStreamFailure() -> Bool {
+    private func recordStreamFailure(reason: String) -> Bool {
         retryFailures += 1
         guard retryFailures >= maximumTelemetryFailures else { return true }
 
@@ -386,7 +386,7 @@ final class MetricsViewModel: ObservableObject {
         streamTask = nil
         updateAvailabilityTask = nil
         updateStatus = updateStatus.stale
-        showPausedState()
+        showPausedState(reason: reason)
         log("Automatic reconnection paused after repeated telemetry failures.")
         return false
     }
@@ -415,7 +415,8 @@ final class MetricsViewModel: ObservableObject {
                             case .connected:
                                 self.connectionHealth.connected(at: .now)
                                 self.snapshot = self.snapshot.replacingTelemetryUnavailable(
-                                    note: "Connected to local dashboard. Waiting for the first telemetry event…",
+                                    note:
+                                        "Connected to \(self.endpoint.sshHost ?? "the dashboard"). Waiting for the first telemetry event…",
                                     statusText: "Waiting…",
                                     timestamp: .now
                                 )
@@ -459,10 +460,10 @@ final class MetricsViewModel: ObservableObject {
             note = dashboardConnectionFailureMessage(for: error)
         } else {
             log("Telemetry stream ended. Waiting to reconnect.")
-            note = "Waiting for the telemetry stream to resume…"
+            note = "The dashboard closed the telemetry stream."
         }
         snapshot = snapshot.replacingTelemetryUnavailable(note: note, statusText: "Reconnecting…", timestamp: .now)
-        guard recordStreamFailure() else { return nil }
+        guard recordStreamFailure(reason: note) else { return nil }
         return TelemetryConnectionHealth.retryDelay(failures: retryFailures)
     }
 
@@ -482,7 +483,7 @@ final class MetricsViewModel: ObservableObject {
                     guard let self, self.isActiveUpdateAvailabilityTask(id: updateAvailabilityTaskID, token: token) else { return }
                     self.updateStatus = availability.available ? .available : .upToDate
                     self.log(availability.available ? "System update is available." : "System is up to date.")
-                    delay = updateAvailabilityPollInterval
+                    delay = availability.available ? updateAvailabilityRecheckInterval : updateAvailabilityPollInterval
                 } catch is CancellationError {
                     return
                 } catch DashboardError.unauthorized {
@@ -493,7 +494,7 @@ final class MetricsViewModel: ObservableObject {
                     guard let self, self.isActiveUpdateAvailabilityTask(id: updateAvailabilityTaskID, token: token) else { return }
                     self.updateStatus = self.updateStatus.stale
                     self.log("Update availability check failed: \(error.userFacingMessage)")
-                    delay = updateAvailabilityRetryInterval
+                    delay = updateAvailabilityRecheckInterval
                 }
 
                 do { try await updateSleep(delay) } catch { return }
@@ -512,7 +513,7 @@ final class MetricsViewModel: ObservableObject {
     private func dashboardConnectionFailureMessage(for error: Error) -> String {
         DashboardConnectionMessage.message(
             for: error,
-            syncAppState: syncAppMonitor.currentState(), endpoint: endpoint
+            endpoint: endpoint
         )
     }
 
@@ -527,16 +528,17 @@ final class MetricsViewModel: ObservableObject {
         updateStatus = .unknown
         activeTelemetryStreamID = nil
         activeUpdateAvailabilityTaskID = nil
-        removeSavedSession()
+        removeSavedSession(allowInteraction: false)
+        history = TelemetryHistory()
         connectionHealth.expire()
         snapshot = .signedOut(note: "Your dashboard session expired. Sign in again.")
         log(logMessage)
     }
 
     @discardableResult
-    private func removeSavedSession() -> Bool {
+    private func removeSavedSession(allowInteraction: Bool) -> Bool {
         do {
-            try sessionStore.clearToken()
+            try sessionStore.clearToken(allowInteraction: allowInteraction)
             sessionStore.clearUsername()
             sessionRemovalError = nil
             return true

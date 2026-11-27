@@ -72,12 +72,3 @@ struct LoginItemPreferencesView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in controller.refresh() }
     }
 }
-
-struct WelcomePreferencesView: View {
-    @AppStorage("PulseBar.HasSeenWelcome") private var hasSeenWelcome = false
-    var body: some View {
-        WelcomePreferencesContent(
-            isVisible: !hasSeenWelcome, endpointAddress: DashboardEndpoint.current.address, dismiss: { hasSeenWelcome = true }
-        )
-    }
-}

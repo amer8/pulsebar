@@ -3,6 +3,7 @@ import Foundation
 struct TelemetryConnectionHealth {
     enum State: String {
         case signedOut = "Signed out"
+        case signingIn = "Signing in…"
         case connecting = "Connecting…"
         case waiting = "Waiting for telemetry…"
         case live = "Connected"
@@ -15,8 +16,8 @@ struct TelemetryConnectionHealth {
     private(set) var lastSampleAt: Date?
     var unrecognizedEventName: String?
     private var connectedAt: Date?
-    mutating func beginConnection() {
-        state = .connecting
+    mutating func beginConnection(signingIn: Bool = false) {
+        state = signingIn ? .signingIn : .connecting
         unrecognizedEventName = nil
         lastSampleAt = nil
         connectedAt = nil

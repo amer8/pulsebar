@@ -1,6 +1,20 @@
 import Foundation
 import Network
 
+@testable import PulseBarApp
+
+extension DashboardClient {
+    init(fixtureURL: URL) {
+        self.init(
+            transport: DashboardSSHTransport(origin: fixtureURL) {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/bin/sh")
+                process.arguments = ["-c", DashboardSSHTransport.remoteCommand]
+                return process
+            })
+    }
+}
+
 // Mutable state and Network callbacks stay on queue; stop() synchronizes with that queue.
 final class DashboardFixture: @unchecked Sendable {
     enum Scenario: String {
@@ -27,10 +41,15 @@ final class DashboardFixture: @unchecked Sendable {
 
     var requests: [Request] { queue.sync { recordedRequests } }
     private var recordedRequests: [Request] = []
+    private var updateAvailable = false
     private let redirectLocation: String?
     private let redirectStatus: Int
     private let redirectAfterSameOrigin: String?
+    private let token: String
+    private let gpuUtilization: Int
     private let scenario: Scenario
+    private let responseOverride: Data?
+    private let keepResponseOpen: Bool
     private var firstStreamBody: Data?
     private let listener: NWListener
     private let queue = DispatchQueue(label: "PulseBarTests.DashboardFixture")
@@ -40,10 +59,15 @@ final class DashboardFixture: @unchecked Sendable {
     private var stopped = false
 
     init(
-        scenario: Scenario, redirectLocation: String? = nil, redirectStatus: Int = 307,
-        redirectAfterSameOrigin: String? = nil, firstStreamBody: Data? = nil
+        scenario: Scenario, token: String = "simulator-token", gpuUtilization: Int = 37, redirectLocation: String? = nil,
+        redirectStatus: Int = 307,
+        redirectAfterSameOrigin: String? = nil, firstStreamBody: Data? = nil, responseOverride: Data? = nil, keepResponseOpen: Bool = false
     ) async throws {
+        self.token = token
+        self.gpuUtilization = gpuUtilization
         self.scenario = scenario
+        self.responseOverride = responseOverride
+        self.keepResponseOpen = keepResponseOpen
         self.firstStreamBody = firstStreamBody
         self.redirectLocation = redirectLocation
         self.redirectStatus = redirectStatus
@@ -89,6 +113,14 @@ final class DashboardFixture: @unchecked Sendable {
         listener.cancel()
         for timer in timers.values { timer.cancel() }
         for connection in connections.values { connection.cancel() }
+    }
+
+    func setUpdateAvailable(_ available: Bool) {
+        queue.sync { updateAvailable = available }
+    }
+
+    func disconnectTelemetry() {
+        queue.sync { for id in Array(timers.keys) { close(id) } }
     }
 
     private func accept(_ connection: NWConnection) {
@@ -144,6 +176,14 @@ final class DashboardFixture: @unchecked Sendable {
 
     private func respond(_ id: UUID, method: String, path: String, headers: [String: String], body: Data) {
         recordedRequests.append(Request(method: method, path: path, headers: headers, body: body))
+        if let responseOverride {
+            connections[id]?.send(
+                content: responseOverride,
+                completion: .contentProcessed { [weak self] _ in
+                    if self?.keepResponseOpen == false { self?.close(id) }
+                })
+            return
+        }
         let redirect =
             path.hasPrefix("/api/")
             ? redirectLocation
@@ -171,8 +211,13 @@ final class DashboardFixture: @unchecked Sendable {
             case .loginInvalidToken:
                 respondJSON(id, payload: ["token": "bad\nvalue"])
             default:
-                respondJSON(id, payload: ["token": "simulator-token"])
+                respondJSON(id, payload: ["token": token])
             }
+            return
+        }
+        if method == "HEAD", path == "/" {
+            let headers = "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n"
+            connections[id]?.send(content: Data(headers.utf8), completion: .contentProcessed { [weak self] _ in self?.close(id) })
             return
         }
         guard method == "GET" else {
@@ -183,13 +228,13 @@ final class DashboardFixture: @unchecked Sendable {
             respondJSON(id, payload: ["dashboard": "PulseBar test fixture"])
             return
         }
-        guard headers["authorization"] == "Bearer simulator-token", scenario != .unauthorized else {
+        guard headers["authorization"] == "Bearer \(token)", scenario != .unauthorized else {
             respondJSON(id, status: 401, payload: ["error": "Session expired"])
             return
         }
         switch path {
         case "/api/v1/updates/available":
-            respondJSON(id, payload: ["available": false])
+            respondJSON(id, payload: ["available": updateAvailable])
         case "/api/v1/gpu_telemetry/stream":
             startStream(id)
         default:
@@ -239,7 +284,7 @@ final class DashboardFixture: @unchecked Sendable {
             event = ": heartbeat\n\n"
         } else {
             let payload =
-                "{\"TelemetryForGPUs\":[{\"percentage_utilization\":37,\"memory_total_in_kib\":134217728,\"memory_available_in_kib\":67108864}]}"
+                "{\"TelemetryForGPUs\":[{\"percentage_utilization\":\(gpuUtilization),\"memory_total_in_kib\":134217728,\"memory_available_in_kib\":67108864}]}"
             let malformed = scenario == .malformedThenLive ? "event: gpu_telemetry\ndata: {bad json}\n\n" : ""
             let newline: String
             switch scenario {

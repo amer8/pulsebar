@@ -1,16 +1,17 @@
 
 <p align="center">
-  <img src="docs/assets/menu-preview.png" alt="PulseBar RAM and GPU history charts with the actions menu closed." width="830" height="488">
+  <img src="docs/assets/menu-preview.png" alt="PulseBar’s device picker shows dgx-1 selected above its RAM and GPU history charts." width="830" height="488">
 </p>
 
 [![CI](https://github.com/amer8/pulsebar/actions/workflows/quality.yml/badge.svg?branch=main)](https://github.com/amer8/pulsebar/actions/workflows/quality.yml)
 
-`PulseBar` is an unofficial macOS menu bar monitor for telemetry exposed by the DGX Dashboard web app on NVIDIA DGX Spark and compatible NVIDIA GB10-based OEM systems. It signs in to the local dashboard, listens to the server-sent event stream, and shows a compact `RAM` and `GPU` status item in the menu bar.
+`PulseBar` is an unofficial macOS menu bar monitor for telemetry exposed by the DGX Dashboard web app on NVIDIA DGX Spark and compatible NVIDIA GB10-based OEM systems. It signs in to each dashboard over verified SSH and follows its live RAM and GPU event stream. Choose a device at the top of the telemetry panel to see its charts and menu bar readings while the others keep reporting.
 
 ## Requirements
 
 - A Mac with Apple silicon running macOS 13 Ventura or newer.
-- Local DGX Dashboard reachable at `http://127.0.0.1:11000` through either NVIDIA Sync or a manual SSH tunnel.
+- An SSH alias for the device in `~/.ssh/config`, a trusted host key, and noninteractive SSH login.
+- A dashboard listening on the device’s loopback interface (default port 11000) and `/usr/bin/curl` on the device.
 - Valid dashboard credentials.
 
 ## Compatible Systems
@@ -26,13 +27,24 @@ PulseBar targets the local DGX Dashboard rather than a specific enclosure. Known
 - [Lenovo ThinkStation PGX](https://www.lenovo.com/us/en/p/workstations/thinkstation-p-series/lenovo-thinkstation-pgx-sff/len102s0023)
 - [MSI EdgeXpert MS-C931](https://ipc.msi.com/product_detail/Industrial-Computer-Box-PC/AI-Supercomputer/EdgeXpert-MS-C931)
 
-[NVIDIA Sync](https://build.nvidia.com/spark/connect-to-your-spark/sync) can expose the local dashboard automatically. Without NVIDIA Sync, forward the dashboard port manually, following NVIDIA's [manual SSH flow](https://build.nvidia.com/spark/connect-to-your-spark/manual-ssh):
+## Set up verified SSH
 
-```bash
-ssh -L 11000:localhost:11000 <username>@<IP-or-spark-hostname.local>
+Choose **+ Add new** in **Preferences → Devices** or in the telemetry panel. **Choose a device** lists SSH aliases from `~/.ssh/config` and its included files that you haven’t added yet. If your device is missing, choose **Set up a device in NVIDIA Sync…** and return to PulseBar to see the refreshed list. If the Dashboard uses a custom port, enter it under **Settings → DGX Dashboard port** before selecting the device. Selecting an alias starts verification immediately. PulseBar opens its own SSH connection using the saved alias and adds the device once its Dashboard responds.
+
+For a new host key, get the expected SHA256 fingerprint from the device’s console or its administrator. Paste that independent value into **Verify your device** and choose **Verify and Connect**. A changed key stops setup. Verify any rotation with your administrator before updating your SSH trust store.
+
+SSH login must work with a key or SSH agent. If your SSH account has no authorized key for this Mac, ask its administrator to install your SSH **public** key for that account. You can also manage the connection yourself in `~/.ssh/config` using an entry such as
+
+```sshconfig
+Host dgx
+    HostName spark.local
+    User your-dgx-user
+    HostKeyAlias dgx
 ```
 
-Then open `http://127.0.0.1:11000` and sign in with the same dashboard credentials PulseBar uses.
+PulseBar checks the host key under the selected alias. A key saved only under `spark.local` may need to be verified again for `dgx`.
+
+PulseBar reads telemetry over verified SSH. To use the dashboard in a browser, choose **Open NVIDIA Sync** in the telemetry panel’s **⋯** menu. Select your device in NVIDIA Sync and open its dashboard. The DGX system update banner also opens NVIDIA Sync.
 
 ## Installation
 
@@ -52,12 +64,15 @@ version, build, release date, and project links.
 ## First Run
 
 1. Launch PulseBar.
-2. Open `Preferences…` from the menu bar item.
-3. Enter your dashboard username and password.
+2. PulseBar opens **Preferences → Devices** the first time it needs an SSH alias. You can return there from the menu bar item’s **Preferences…** action.
+3. Choose your device. Once verification succeeds, PulseBar restores an available saved Dashboard session or prompts you to sign in for that device. When upgrading from a port-only configuration, sign in once for the new profile.
 4. After sign-in, PulseBar stores the returned token in Keychain and starts the telemetry stream unless reconnection is paused.
-5. On later launches, PulseBar restores the saved session and reconnects automatically.
-   After five consecutive telemetry failures, reconnection pauses for that local port, even
-   after a restart. Choose **Reconnect** from the telemetry panel’s actions menu (···) to resume.
+5. On later launches, PulseBar automatically restores sessions that Keychain allows it to read. If a device needs Keychain permission, select it in **Preferences → Devices** and choose **Restore Saved Session**. To forget that saved sign-in, choose **Settings → Remove Saved Session…**, check the device name, and click **Remove**.
+   The Keychain prompt names the device, for example **PulseBar Dashboard – lab**. An entry created by an older build can still appear as **PulseBar.Dashboard**. To give that entry the device name, sign out of that device and sign back in once.
+   After five consecutive telemetry failures, reconnection pauses for that alias and port, even
+   after a restart. Choose **Reconnect** in the telemetry panel or **Preferences → Devices** to resume.
+
+To monitor a second device, choose **+ Add new** in either device picker, then complete setup and sign-in. Both device pickers show the Dashboard username for each signed-in device. Choose a device in **Preferences → Devices** to manage its account, or in the telemetry panel to choose which device the charts and menu bar show. Both devices keep collecting readings while you switch. Signing out stops collection for that device only.
 
 ## Development
 

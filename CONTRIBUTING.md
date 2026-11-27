@@ -6,7 +6,7 @@ Thanks for taking the time to improve PulseBar.
 
 You need macOS 13 Ventura or newer and the Swift 6 toolchain.
 
-For manual testing, keep a local DGX Dashboard reachable at `http://127.0.0.1:11000` through either NVIDIA Sync or a manual SSH tunnel, then sign in with valid dashboard credentials.
+For manual testing, configure a DGX SSH alias and enroll its host key as described in the README, then sign in with dashboard credentials.
 
 Run from source:
 
@@ -92,7 +92,7 @@ swift package --disable-keychain --disable-netrc resolve
 Before releasing changes to authentication or the updater, manually verify these behaviors:
 
 - Sign in to a real Spark dashboard, restart PulseBar, and confirm the saved session resumes.
-- Check reconnect behavior after sleep, network loss, and tunnel restart during an extended run.
+- Check reconnect behavior after sleep, network loss, and SSH server restart during an extended run.
 - Measure idle CPU and energy use, and check keyboard navigation and VoiceOver in Preferences and the telemetry panel.
 - Run the signed app on the oldest supported macOS version, then exercise an actual signed Sparkle update.
 
@@ -135,38 +135,32 @@ The HTTP fixture emits KiB; telemetry compatibility tests also cover legacy MB p
 
 Run `make check` for automated connection checks. Run `swift run PulseBar --demo` to
 explore the telemetry UI without saved credentials, or `swift run PulseBar` to test a real
-dashboard through NVIDIA Sync or an SSH tunnel. The Swift fixtures are only built for tests;
-Python is not required.
+dashboard through verified SSH. A Swift integration test runs the system OpenSSH client and server on loopback with temporary keys and a private configuration.
 
 ## Guided Setup Feature
 
-Guided setup includes a local-port setting, a dashboard connection check, NVIDIA
-Sync and SSH setup actions, and inline login errors. Saved sessions are isolated by port.
-Run `make check` and `swift run PulseBar`. To manually test an alternate port, forward
-the real dashboard to port 11001 through an SSH tunnel, set port 11001 in Preferences,
-and sign in with dashboard credentials. The existing telemetry menu is retained.
+Both pickers use the saved PulseBar profiles. Guided setup offers a read-only SSH alias chooser and a launcher for NVIDIA Sync. Adding an alias requires a successful dashboard check over verified SSH before sign-in. Saved sessions are isolated by SSH alias and port.
+To test an alternate port during setup, enter the port the dashboard listens on in **Settings → DGX Dashboard port**, then select its alias to start verification.
 
-Preferences uses compact connection and account cards. The app and standalone Preferences
-renderer share the same SwiftUI layout in `Sources/PulseBarUI`. To inspect signed-in,
-sign-in, and invalid-port states in both light and dark mode without saved credentials:
+Devices and General share the SwiftUI Preferences layout in `Sources/PulseBarUI`.
+Render the setup, profile edit, signed-in, signed-out, paused, and Keychain recovery states
+in light and dark appearances with the following command.
 
 ```bash
 swift run pulsebar-tools render-preferences-previews
 ```
 
-The previews are saved in `.build/preferences-previews/`. This feature keeps the README
-image, caption, and image dimensions identical to `main`.
+The previews are saved in `.build/preferences-previews/`.
 
 ## Launch at Login Feature
 
 Launch at login includes opt-in startup registration, actual macOS registration status,
-approval and error feedback, and a first-run welcome in Preferences. Run `make check` for
+approval and error feedback, and first-run SSH setup in Preferences. Run `make check` for
 the fake-service tests. Run `make install` and open `~/Applications/PulseBar.app` to test
 registration from an installed app. It uses the original telemetry menu and dashboard
 connection settings. The tests do not register a real login item.
 
-Preferences starts at a compact width and fits its rendered content, including the welcome
-guide, sign-in fields, and status messages. Its complete window frame is capped by the
+Preferences starts at a compact width and fits its rendered content, including SSH setup help, sign-in fields, and status messages. Its complete window frame is capped by the
 current display's usable area; smaller displays retain scrolling. Content changes and
 display changes trigger a refit, and narrower layouts stack connection actions.
 
@@ -201,8 +195,7 @@ to 0–100% for comparison. Relative time labels avoid clipped clock labels. The
 card in Preferences retains the existing display preference, so previously selected modes
 continue to apply.
 
-The actions menu (⋯) in the panel header opens Preferences or the dashboard and quits
-PulseBar. Preferences and Quit also retain their ⌘, and ⌘Q shortcuts.
+The actions menu (⋯) in the panel header can open **Preferences → Devices**, launch NVIDIA Sync, or quit PulseBar. Preferences and Quit also retain their ⌘, and ⌘Q shortcuts.
 
 The **About PulseBar** item in the actions menu opens a compact About popover with the app
 icon, version and build, release date, and project links. Version information comes from
@@ -213,5 +206,5 @@ dark mode with `swift run pulsebar-tools render-about-previews`; images are save
 `.build/about-previews/`.
 
 To render the shared panel in light and dark mode with live, low-use, full-scale,
-reconnecting, and signed-out sample states, run `swift run pulsebar-tools render-history-previews`.
+reconnecting, paused, expired, signing-in, and signed-out sample states, run `swift run pulsebar-tools render-history-previews`.
 Images are saved in `.build/history-panel-previews/`.

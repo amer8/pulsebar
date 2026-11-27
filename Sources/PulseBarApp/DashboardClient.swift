@@ -32,23 +32,25 @@ struct UpdateAvailability: Decodable, Sendable {
 struct DashboardClient: DashboardServing {
     static let maximumLineBytes = 64 * 1024
     static let maximumEventBytes = 256 * 1024
+    static let maximumJSONBytes = 64 * 1024
 
-    private let session: URLSession
-    private let baseURL: URL
-    private let redirectDelegate: DashboardRedirectDelegate
+    private let transport: DashboardSSHTransport
+    private var baseURL: URL { transport.origin }
 
-    init(baseURL: URL = URL(string: "http://127.0.0.1:11000")!, session: URLSession = .shared) {
-        self.baseURL = baseURL
-        self.session = session
-        self.redirectDelegate = DashboardRedirectDelegate(origin: baseURL)
-    }
+    init(endpoint: DashboardEndpoint) { transport = DashboardSSHTransport(endpoint: endpoint) }
+
+    init(transport: DashboardSSHTransport) { self.transport = transport }
 
     func checkConnection() async throws -> Bool {
         var request = URLRequest(url: baseURL)
         request.timeoutInterval = 5
-        let (_, response) = try await session.data(for: request, delegate: redirectDelegate)
-        guard let http = response as? HTTPURLResponse else { return false }
-        return (200..<400).contains(http.statusCode)
+        for method in ["HEAD", "GET"] {
+            request.httpMethod = method
+            let status = try await transport.withResponse(to: request) { status, _ in status }
+            if method == "HEAD", [405, 501].contains(status) { continue }
+            return (200..<400).contains(status)
+        }
+        return false
     }
 
     func login(username: String, password: String) async throws -> String {
@@ -60,13 +62,10 @@ struct DashboardClient: DashboardServing {
             "password": password,
         ])
 
-        let (data, response) = try await session.data(for: request, delegate: redirectDelegate)
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw DashboardError.invalidResponse
-        }
+        let (data, status) = try await jsonResponse(for: request)
 
-        guard httpResponse.statusCode == 200 else {
-            if httpResponse.statusCode == 401 {
+        guard status == 200 else {
+            if status == 401 {
                 throw DashboardError.loginFailed
             }
 
@@ -88,16 +87,13 @@ struct DashboardClient: DashboardServing {
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
 
-        let (data, response) = try await session.data(for: request, delegate: redirectDelegate)
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw DashboardError.invalidResponse
-        }
+        let (data, status) = try await jsonResponse(for: request)
 
-        if httpResponse.statusCode == 401 {
+        if status == 401 {
             throw DashboardError.unauthorized
         }
 
-        guard httpResponse.statusCode == 200 else {
+        guard status == 200 else {
             if let errorResponse = try? JSONDecoder().decode(DashboardErrorResponse.self, from: data) {
                 throw DashboardError.server(errorResponse.error)
             }
@@ -122,19 +118,23 @@ struct DashboardClient: DashboardServing {
 
         onLog("Requesting /api/v1/gpu_telemetry/stream.")
 
-        let (bytes, response) = try await session.bytes(for: request, delegate: redirectDelegate)
-        defer { bytes.task.cancel() }
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw DashboardError.invalidResponse
+        try await transport.withResponse(to: request) { status, reader in
+            try await readTelemetry(status: status, reader: reader, onLog: onLog, onStatus: onStatus, onSample: onSample)
         }
+    }
 
-        onLog("Telemetry stream responded with HTTP \(httpResponse.statusCode).")
+    private func readTelemetry(
+        status: Int, reader: DashboardResponseReader, onLog: @escaping @Sendable (String) -> Void,
+        onStatus: @escaping @Sendable (TelemetryStreamStatus) async -> Void,
+        onSample: @escaping @Sendable (TelemetrySample) async -> Void
+    ) async throws {
+        onLog("Telemetry stream responded with HTTP \(status).")
 
-        if httpResponse.statusCode == 401 {
+        if status == 401 {
             throw DashboardError.unauthorized
         }
 
-        guard httpResponse.statusCode == 200 else {
+        guard status == 200 else {
             throw DashboardError.server("Unable to open the telemetry stream.")
         }
 
@@ -171,7 +171,7 @@ struct DashboardClient: DashboardServing {
             }
         }
 
-        for try await byte in bytes {
+        while let byte = try await reader.next() {
             if Task.isCancelled { throw CancellationError() }
             if byte == 0x0A && previousWasCarriageReturn {
                 previousWasCarriageReturn = false
@@ -234,6 +234,18 @@ struct DashboardClient: DashboardServing {
         }
     }
 
+    private func jsonResponse(for request: URLRequest) async throws -> (Data, Int) {
+        try await transport.withResponse(to: request) { status, reader in
+            if status == 401 { return (Data(), status) }
+            var body = Data()
+            while let byte = try await reader.next() {
+                guard body.count < Self.maximumJSONBytes else { throw DashboardError.responseTooLarge }
+                body.append(byte)
+            }
+            return (body, status)
+        }
+    }
+
     private func endpoint(_ path: String) -> URL {
         URL(string: path, relativeTo: baseURL)!.absoluteURL
     }
@@ -251,43 +263,5 @@ struct DashboardClient: DashboardServing {
         }
 
         return (field, value)
-    }
-}
-
-// A per-task delegate also protects callers that inject a custom URLSession.
-private final class DashboardRedirectDelegate: NSObject, URLSessionTaskDelegate, Sendable {
-    private let origin: URL
-
-    init(origin: URL) {
-        self.origin = origin
-    }
-
-    func urlSession(
-        _ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
-        newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void
-    ) {
-        guard let target = request.url, sameOrigin(origin, target) else {
-            completionHandler(nil)
-            return
-        }
-        var redirected = request
-        if let authorization = task.originalRequest?.value(forHTTPHeaderField: "Authorization") {
-            redirected.setValue(authorization, forHTTPHeaderField: "Authorization")
-        }
-        completionHandler(redirected)
-    }
-
-    private func sameOrigin(_ lhs: URL, _ rhs: URL) -> Bool {
-        guard let left = URLComponents(url: lhs, resolvingAgainstBaseURL: true),
-            let right = URLComponents(url: rhs, resolvingAgainstBaseURL: true),
-            let leftScheme = left.scheme?.lowercased(), let rightScheme = right.scheme?.lowercased(),
-            let leftHost = left.host?.lowercased(), let rightHost = right.host?.lowercased(),
-            right.user == nil, right.password == nil
-        else { return false }
-        func port(_ components: URLComponents, scheme: String) -> Int? {
-            components.port ?? (scheme == "http" ? 80 : scheme == "https" ? 443 : nil)
-        }
-        return leftScheme == rightScheme && leftHost == rightHost
-            && port(left, scheme: leftScheme) == port(right, scheme: rightScheme)
     }
 }

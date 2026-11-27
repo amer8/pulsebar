@@ -4,16 +4,52 @@ import XCTest
 @testable import PulseBarApp
 
 final class DashboardBoundaryTests: XCTestCase {
+    func testConnectionProbeFinishesAtResponseHeaders() async throws {
+        let headers = Data("HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\n".utf8)
+        let server = try await DashboardFixture(scenario: .live, responseOverride: headers, keepResponseOpen: true)
+        defer { server.stop() }
+        let reachable = try await DashboardClient(fixtureURL: server.url).checkConnection()
+        XCTAssertTrue(reachable)
+    }
+
+    func testLoginAndUpdateBoundJSONWhileReadingSuccessAndErrorBodies() async throws {
+        for status in ["200 OK", "503 Service Unavailable"] {
+            let response =
+                Data("HTTP/1.1 \(status)\r\nConnection: close\r\n\r\n".utf8)
+                + Data(repeating: 32, count: DashboardClient.maximumJSONBytes + 1)
+            let server = try await DashboardFixture(scenario: .live, responseOverride: response)
+            defer { server.stop() }
+            let client = DashboardClient(fixtureURL: server.url)
+            do {
+                _ = try await client.login(username: "demo", password: "demo")
+                XCTFail("Accepted oversized login response")
+            } catch DashboardError.responseTooLarge {}
+            do {
+                _ = try await client.updateAvailability(token: "fixture-token")
+                XCTFail("Accepted oversized update response")
+            } catch DashboardError.responseTooLarge {}
+        }
+    }
+
+    func testCookieFromOneDashboardIsAbsentOnSecondPort() async throws {
+        let response = Data("HTTP/1.1 200 OK\r\nSet-Cookie: fixture=one; Path=/\r\nContent-Length: 0\r\n\r\n".utf8)
+        let first = try await DashboardFixture(scenario: .live, responseOverride: response)
+        defer { first.stop() }
+        let second = try await DashboardFixture(scenario: .live)
+        defer { second.stop() }
+        _ = try await DashboardClient(fixtureURL: first.url).checkConnection()
+        _ = try await DashboardClient(fixtureURL: second.url).checkConnection()
+        XCTAssertNil(try XCTUnwrap(second.requests.first).headers["cookie"])
+    }
+
     func testInvalidLoginTokensAreRejected() async throws {
         for scenario in [DashboardFixture.Scenario.loginEmptyToken, .loginInvalidToken] {
             let server = try await DashboardFixture(scenario: scenario)
-            let session = URLSession(configuration: .ephemeral)
             defer {
-                session.invalidateAndCancel()
                 server.stop()
             }
             do {
-                _ = try await DashboardClient(baseURL: server.url, session: session).login(username: "demo", password: "demo")
+                _ = try await DashboardClient(fixtureURL: server.url).login(username: "demo", password: "demo")
                 XCTFail("Invalid login token was accepted")
             } catch DashboardError.invalidSessionToken {
                 // Expected.
@@ -23,12 +59,10 @@ final class DashboardBoundaryTests: XCTestCase {
 
     func testInvalidTokensNeverStartAuthenticatedRequests() async throws {
         let server = try await DashboardFixture(scenario: .live)
-        let session = URLSession(configuration: .ephemeral)
         defer {
-            session.invalidateAndCancel()
             server.stop()
         }
-        let client = DashboardClient(baseURL: server.url, session: session)
+        let client = DashboardClient(fixtureURL: server.url)
         for token in ["", " ", "bad\r\nvalue", "a=b", "é"] {
             do {
                 _ = try await client.updateAvailability(token: token)
@@ -97,23 +131,19 @@ final class DashboardBoundaryTests: XCTestCase {
         onSample: @escaping @Sendable (TelemetrySample) async -> Void = { _ in XCTFail("Unexpected sample") }
     ) async throws {
         let server = try await DashboardFixture(scenario: .live, firstStreamBody: Data(body.utf8))
-        let session = URLSession(configuration: .ephemeral)
         defer {
-            session.invalidateAndCancel()
             server.stop()
         }
-        try await DashboardClient(baseURL: server.url, session: session).consumeTelemetryStream(
+        try await DashboardClient(fixtureURL: server.url).consumeTelemetryStream(
             token: "simulator-token", onStatus: onStatus, onSample: onSample)
     }
 
     func testSameOriginRedirectsPreserveDashboardRequests() async throws {
         let server = try await DashboardFixture(scenario: .live, redirectLocation: "same-origin")
-        let session = URLSession(configuration: .ephemeral)
         defer {
-            session.invalidateAndCancel()
             server.stop()
         }
-        let client = DashboardClient(baseURL: server.url, session: session)
+        let client = DashboardClient(fixtureURL: server.url)
         let token = try await client.login(username: "demo", password: "demo")
         XCTAssertEqual(token, "simulator-token")
         let availability = try await client.updateAvailability(token: token)
@@ -145,13 +175,11 @@ final class DashboardBoundaryTests: XCTestCase {
         let server = try await DashboardFixture(
             scenario: .live, redirectLocation: "same-origin",
             redirectAfterSameOrigin: destination.url.absoluteString + "/capture")
-        let session = URLSession(configuration: .ephemeral)
         defer {
-            session.invalidateAndCancel()
             server.stop()
             destination.stop()
         }
-        let client = DashboardClient(baseURL: server.url, session: session)
+        let client = DashboardClient(fixtureURL: server.url)
         do {
             _ = try await client.login(username: "demo", password: "demo")
             XCTFail("Redirect accepted")
@@ -174,12 +202,10 @@ final class DashboardBoundaryTests: XCTestCase {
         for status in [301, 302, 303, 307, 308] {
             let server = try await DashboardFixture(
                 scenario: .live, redirectLocation: destination.url.absoluteString + "/capture", redirectStatus: status)
-            let session = URLSession(configuration: .ephemeral)
             defer {
-                session.invalidateAndCancel()
                 server.stop()
             }
-            let client = DashboardClient(baseURL: server.url, session: session)
+            let client = DashboardClient(fixtureURL: server.url)
             do {
                 _ = try await client.login(username: "demo", password: "demo")
                 XCTFail("Redirect accepted")

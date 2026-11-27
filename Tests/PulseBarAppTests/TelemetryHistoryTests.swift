@@ -62,12 +62,12 @@ private final class DemoSessionStore: DashboardSessionStoring {
         reads += 1
         return "saved-user"
     }
-    func loadToken() -> String? {
+    func loadToken(allowInteraction: Bool) -> String? {
         reads += 1
         return "saved-token"
     }
     func saveUsername(_ username: String) { writes += 1 }
     func clearUsername() { writes += 1 }
     func saveToken(_ token: String) { writes += 1 }
-    func clearToken() { writes += 1 }
+    func clearToken(allowInteraction: Bool) { writes += 1 }
 }

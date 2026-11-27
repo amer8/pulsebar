@@ -4,6 +4,38 @@ import XCTest
 @testable import PulseBarTools
 
 final class ReleaseConfigurationTests: XCTestCase {
+    func testBundleReleaseDateIsValidatedBeforeWritingPlist() throws {
+        let project = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let packaging = directory.appendingPathComponent("Packaging")
+        try FileManager.default.createDirectory(at: packaging, withIntermediateDirectories: false)
+        for file in ["Info.plist", "set-release-date.sh"] {
+            try FileManager.default.copyItem(
+                at: project.appendingPathComponent("Packaging/\(file)"), to: packaging.appendingPathComponent(file))
+        }
+        let build = directory.appendingPathComponent(".build/release")
+        try FileManager.default.createDirectory(at: build, withIntermediateDirectories: true)
+        try Data().write(to: build.appendingPathComponent("PulseBar"))
+        let plist = build.appendingPathComponent("PulseBar.app/Contents/Info.plist")
+        let changelog = directory.appendingPathComponent("CHANGELOG.md")
+        let arguments = [
+            "-f", project.appendingPathComponent("Makefile").path, "-o", "release", "bundle", "SKIP_ICON=1", "APP_VERSION=1.0",
+        ]
+        func storedDate() throws -> String? {
+            let values = try PropertyListSerialization.propertyList(from: Data(contentsOf: plist), format: nil) as? [String: Any]
+            return values?["PulseBarReleaseDate"] as? String
+        }
+        try "## 1.0 - 2026-11-24\n".write(to: changelog, atomically: true, encoding: .utf8)
+        _ = try Command.capture("/usr/bin/make", arguments, cwd: directory, environment: ["PATH": "/usr/bin:/bin"])
+        XCTAssertEqual(try storedDate(), "2026-11-24")
+        for heading in ["## 1.0 - \"untrusted\"", "## 1.0 - 2026-11-24 trailing"] {
+            try heading.write(to: changelog, atomically: true, encoding: .utf8)
+            XCTAssertThrowsError(try Command.capture("/usr/bin/make", arguments, cwd: directory, environment: ["PATH": "/usr/bin:/bin"]))
+        }
+    }
+
     func testPlistVersionsMatchVersionEnvironment() throws {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()

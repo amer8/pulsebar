@@ -3,12 +3,26 @@ import XCTest
 @testable import PulseBarApp
 
 final class DashboardEndpointTests: XCTestCase {
+    @MainActor
+    func testUnsignedSyncBundleIsRejectedEvenWithMatchingIdentifier() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let app = directory.appendingPathComponent("NVIDIA Sync.app")
+        let contents = app.appendingPathComponent("Contents")
+        try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let info = ["CFBundleIdentifier": "com.nvidia.nvidia-sync", "CFBundlePackageType": "APPL"]
+        try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0).write(
+            to: contents.appendingPathComponent("Info.plist"))
+        XCTAssertFalse(DashboardSetupActions.isTrustedSync(at: app))
+        XCTAssertFalse(DashboardSetupActions.isTrustedSync(at: URL(fileURLWithPath: "/usr/bin/true")))
+    }
+
     func testConnectionAdviceUsesTheRequestedPort() throws {
         let message = DashboardConnectionMessage.message(
-            for: URLError(.cannotConnectToHost), syncAppState: .notRunning, endpoint: try DashboardEndpoint(port: 11001)
+            for: URLError(.cannotConnectToHost), endpoint: try DashboardEndpoint(port: 11001, sshHost: "spark")
         )
         XCTAssertTrue(message.contains("127.0.0.1:11001"))
-        XCTAssertTrue(message.contains("ssh -L 11001:localhost:11000"))
+        XCTAssertTrue(message.contains("SSH access to spark"))
     }
     func testPortValidationAndLoopbackOnlyURLs() throws {
         XCTAssertEqual(try DashboardEndpoint.parse(" 11001 ").url.absoluteString, "http://127.0.0.1:11001")
@@ -17,14 +31,22 @@ final class DashboardEndpointTests: XCTestCase {
         }
     }
 
-    func testCredentialsAreScopedAndDefaultKeysRemainCompatible() throws {
-        let standard = DashboardEndpoint.standard
-        let other = try DashboardEndpoint(port: 11001)
-        XCTAssertEqual(standard.sessionAccount, "dashboard-token")
-        XCTAssertEqual(standard.usernameKey, "PulseBar.Dashboard.Username")
-        XCTAssertNotEqual(standard.sessionAccount, other.sessionAccount)
-        XCTAssertNotEqual(standard.usernameKey, other.usernameKey)
-        XCTAssertEqual(other.tunnelCommand, "ssh -L 11001:localhost:11000 <username>@<IP-or-spark-hostname.local>")
+    func testAliasesAndPortsIdentifySeparateSSHProfiles() throws {
+        let endpoint = try DashboardEndpoint.parse(" 11000 ", sshHost: " dgx ")
+        let other = try DashboardEndpoint(port: 11000, sshHost: "lab_2.example")
+        let alternate = try DashboardEndpoint(port: 11001, sshHost: "dgx")
+        for profile in [DashboardEndpoint.standard, other, alternate] {
+            XCTAssertNotEqual(endpoint.sessionAccount, profile.sessionAccount)
+            XCTAssertNotEqual(endpoint.usernameKey, profile.usernameKey)
+            XCTAssertNotEqual(endpoint.reconnectPausedKey, profile.reconnectPausedKey)
+        }
+
+    }
+
+    func testInvalidSSHAliasesAreRejectedBeforeOpeningAConnection() {
+        for alias in ["", "-v", "a b", "user@host", "a/b", "a\nb", "é", String(repeating: "a", count: 254)] {
+            XCTAssertThrowsError(try DashboardEndpoint(port: 11000, sshHost: alias), alias)
+        }
     }
 
     @MainActor
