@@ -3,6 +3,19 @@
     <channel>
         <title>PulseBar</title>
         <item>
+            <title>0.3.0</title>
+            <pubDate>Fri, 27 Nov 2026 16:43:58 +0100</pubDate>
+            <link>https://raw.githubusercontent.com/amer8/pulsebar/main/appcast.xml</link>
+            <sparkle:version>8</sparkle:version>
+            <sparkle:shortVersionString>0.3.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description><![CDATA[<h3>Monitor multiple devices</h3><p>PulseBar now tracks RAM and GPU usage on multiple devices at once. Click the device name at the top of the telemetry panel and choose another device to switch the charts and menu bar readings. Each device keeps collecting its own history while you view another.</p><h3>After updating</h3><p>If you used a local port to connect, open Preferences → Devices. “+ Add new” opens the device picker. Choose a saved SSH alias to start verification, or use “Set up a device in NVIDIA Sync…” if yours is missing. If asked to verify the device, enter the SSH fingerprint from its console or your administrator. Then sign in to DGX Dashboard once to resume telemetry.</p><h3>What changed</h3><ul><li>Both pickers list only devices added to PulseBar and show the Dashboard username for each signed-in device. PulseBar treats your SSH configuration as read-only. In Preferences → Devices, select a device to manage its account. The Settings section shows the DGX Dashboard port and identifies its default value. Signing out clears only that device’s saved session.</li><li>PulseBar verifies your device’s SSH host key before sending dashboard credentials. It remembers your sign-in separately for each connection and dashboard port.</li><li>Saved sessions restore without Keychain prompts at startup. If a device needs permission, choose Restore Saved Session for that device in Preferences → Devices. New Keychain entries show the device name in the permission prompt.</li><li>To use the dashboard in your browser, choose Open NVIDIA Sync from the telemetry panel’s ⋯ menu, then select your device and open its dashboard.</li><li>While the selected device reconnects, the menu bar shows its connection status in place of old RAM and GPU readings.</li><li>The menu bar update icon and the panel’s update banner clear when DGX Dashboard reports no available system updates.</li></ul>
+
+]]></description>
+            <enclosure url="https://github.com/amer8/pulsebar/releases/download/v0.3.0/PulseBar-0.3.0.zip" length="4540538" type="application/octet-stream" sparkle:edSignature="a0ztwvQhef4d5LdQnbIe3DvLmWALK/o+MBoUq2PklA4HfgDmHyD0x6uTmkGQwuFO6XFKMzwriGhKZfIvTfwRBw=="/>
+        </item>
+        <item>
             <title>0.2.5</title>
             <pubDate>Thu, 19 Nov 2026 17:52:22 +0100</pubDate>
             <link>https://raw.githubusercontent.com/amer8/pulsebar/main/appcast.xml</link>
@@ -27,19 +40,6 @@
 
 ]]></description>
             <enclosure url="https://github.com/amer8/pulsebar/releases/download/v0.2.4/PulseBar-0.2.4.zip" length="4335494" type="application/octet-stream" sparkle:edSignature="mpf6P63NgcZJfO3fL6og0msBMmIMeZfEwVJRHt5870w2ASzY3GkCtMlJfx+wGHEqCjPtK631HdEGfrTvzpP5Ag=="/>
-        </item>
-        <item>
-            <title>0.2.3</title>
-            <pubDate>Thu, 12 Nov 2026 22:39:43 +0100</pubDate>
-            <link>https://raw.githubusercontent.com/amer8/pulsebar/main/appcast.xml</link>
-            <sparkle:version>5</sparkle:version>
-            <sparkle:shortVersionString>0.2.3</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description><![CDATA[<ul><li>PulseBar remembers your selected time range and chart scale between launches.</li><li>Hover over a RAM or GPU chart to see a reading and its timestamp.</li><li>About PulseBar and Reconnect are now in the panel’s ··· menu.</li><li>PulseBar handles Keychain errors more reliably when restoring a saved dashboard session.</li></ul>
-
-]]></description>
-            <enclosure url="https://github.com/amer8/pulsebar/releases/download/v0.2.3/PulseBar-0.2.3.zip" length="4334195" type="application/octet-stream" sparkle:edSignature="JtonaUv1PmD66wdeZrtTrhipQGqpE9JItzl6cFyLrcgPcAA0JZI+A6nc1z1youNkCy4VokAKxE5j52WvT53YCA=="/>
         </item>
     </channel>
 </rss>
